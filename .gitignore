@@ -1,9 +1,87 @@
-.cache/
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
-.DS_Store
-.vscode/
-dist/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env/
+.venv/
+poetry.lock
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Distribution / packaging
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
 *.egg-info/
+.installed.cfg
+*.egg
+
+# Sphinx build files
+_build/
+
+# Logs and local database
+*.log
+*.sql
+*.sqlite
+
+# Editor-specific files
+.vscode/
+.idea/
+*.swp
+*~
+*.sublime-workspace
+
+# macOS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Test and coverage results
+.coverage
+.tox/
+.nox/
+.cache/
+pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.swp
+*.swo
+*.orig
+
+# Generated documentation
+docs/_build/
+docs/generated/
+
+# Other files
+*.lock
+*.log
+*.bak
+*.tmp
