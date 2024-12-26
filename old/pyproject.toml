@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "wn-lookup-gen"
+version = "0.1.0"
+description = "Raster processing utility"
+authors = ["Gunjan <dgh007786007@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+gdal = "3.8.2"
+matplotlib = "^3.10.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+lab_raster_utils = "lab_raster_utils.__init__"
