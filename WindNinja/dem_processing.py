@@ -22,7 +22,7 @@ def resample_tif(input_path, target_resolution):
     print(f"Resampled DEM saved to: {output_path}")
     return output_path
 
-def process_dem(subpoly, buffer_size, dem_file, output_dir):
+def process_dem(subpoly, buffer_size, dem_file, output_dir, resolution):
     buffered_subpoly = subpoly.buffer(buffer_size)
 
     dem_bounds = dem_file.rio.bounds()
@@ -39,14 +39,19 @@ def process_dem(subpoly, buffer_size, dem_file, output_dir):
 
     clipped_dem = dem_file.rio.clip([buffered_geojson], crs=dem_file.rio.crs, drop=True)
 
-    reprojected_dem = clipped_dem.rio.reproject("EPSG:32612")
+    # Reproject with explicit resolution and alignment
+    reprojected_dem = clipped_dem.rio.reproject(
+        "EPSG:32612",
+        resolution=(resolution, resolution),
+        align=True
+    )
 
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     output_path = os.path.join(output_dir, "processed_dem.tif")
-    reprojected_dem.rio.to_raster(output_path)
+    reprojected_dem.rio.to_raster(output_path, resolution=(resolution, resolution))
 
     return output_path
 
