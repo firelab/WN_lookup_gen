@@ -3,6 +3,8 @@ from shapely.geometry import box, mapping
 from rasterio.merge import merge
 import rioxarray as rxr
 import os
+import numpy as np
+from scipy.ndimage import generic_filter
 import shutil
 
 def resample_tif(input_path, target_resolution):
@@ -22,6 +24,45 @@ def resample_tif(input_path, target_resolution):
     print(f"Resampled DEM saved to: {output_path}")
     return output_path
 
+def replace_water_and_fill_nodata(data, water_value=-9999, nodata_value=None, replacement_value=0, fill=True):
+    """
+    Replace water values (-9999) with a fixed value (e.g., 0) and optionally fill NoData values.
+    Also, print the count of NoData values before and after processing.
+    """
+    # Count NoData values before processing
+    nodata_count_before = np.sum(data == nodata_value) if nodata_value is not None else 0
+    water_count_before = np.sum(data == water_value)
+    print(f"Count of NoData values before processing: {nodata_count_before}")
+    print(f"Count of water (-9999) values before processing: {water_count_before}")
+
+    # Replace water values (-9999) with the replacement value (e.g., 0)
+    water_mask = data == water_value
+    data[water_mask] = replacement_value
+
+    # Replace NoData values (if provided) with NaN for processing
+    if nodata_value is not None:
+        nodata_mask = data == nodata_value
+        data[nodata_mask] = np.nan  # Mark NoData values as NaN
+
+    # Fill NoData values using a moving average filter if requested
+    if fill:
+        def fill_function(window):
+            valid_pixels = window[~np.isnan(window)]  # Exclude NaN
+            return np.mean(valid_pixels) if len(valid_pixels) > 0 else np.nan
+
+        data = generic_filter(
+            data, fill_function, size=3, mode='constant', cval=np.nan
+        )
+
+    # Replace any remaining NaN values with the replacement value
+    data = np.nan_to_num(data, nan=replacement_value)
+
+    # Count NoData values after processing
+    nodata_count_after = np.sum(data == nodata_value) if nodata_value is not None else 0
+    print(f"Count of NoData values after processing: {nodata_count_after}")
+
+    return data
+
 def process_dem(subpoly, buffer_size, dem_file, output_dir, resolution):
     buffered_subpoly = subpoly.buffer(buffer_size)
 
@@ -39,7 +80,6 @@ def process_dem(subpoly, buffer_size, dem_file, output_dir, resolution):
 
     clipped_dem = dem_file.rio.clip([buffered_geojson], crs=dem_file.rio.crs, drop=True)
 
-    # Reproject with explicit resolution and alignment
     reprojected_dem = clipped_dem.rio.reproject(
         "EPSG:32612",
         resolution=(resolution, resolution),
@@ -96,8 +136,5 @@ def mosaic_dem_tiles(input_dir, target_crs, resolution):
         dest.write(mosaic)
 
     print(f"Saved mosaicked DEM to: {output_path}")
-
-    for src in src_files_to_mosaic:
-        src.close()
 
     return output_path

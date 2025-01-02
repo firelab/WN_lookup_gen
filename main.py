@@ -75,23 +75,23 @@ class DEMTiler:
             process_dem(subpoly, buffer_size, self.raster_data, tile_output_dir, self.resolution)
 
 def main():
-    dem_file_path = 'WindNinjaData/LC20_Elev_220_RS_240m.tif'
+    dem_file_path = 'WindNinjaData/LC20_Elev_220_RS_30m.tif'
     boundary_file = 'WindNinjaData/ne_10m_admin_1_states_provinces_lakes.shp'
 
     # # Resample DEM
     # resampled_dem_file_path = resample_tif(dem_file_path, 120)
 
     # Initialize DEMTiler
-    dem_tiler = DEMTiler(dem_file_path, resolution=240, boundary_file=boundary_file)
+    dem_tiler = DEMTiler(dem_file_path, resolution=30, boundary_file=boundary_file)
 
     # Process DEM tiles by hybrid approach (size and boundary alignment)
-    dem_tiler.process_tiles_by_hybrid(tile_size=500000, buffer_size=100000)
+    dem_tiler.process_tiles_by_hybrid(tile_size=500000, buffer_size=16000)
 
     # Process DEM tiles by boundary
     # dem_tiler.process_tiles_by_boundary(buffer_size=16000)
 
     # Mosaic processed DEM tiles
-    mosaic_dem_tiles(dem_tiler.output_dir, "EPSG:32612", (240, 240))
+    mosaic_dem_tiles(dem_tiler.output_dir, "EPSG:32612", (30, 30))
 
 if __name__ == "__main__":
     main()
