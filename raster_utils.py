@@ -1,11 +1,46 @@
-import rasterio
-from shapely.geometry import box, mapping
-from rasterio.merge import merge
-import rioxarray as rxr
 import os
-import numpy as np
-from scipy.ndimage import generic_filter
 import shutil
+from shapely.geometry import box, mapping
+import rioxarray as rxr
+import geopandas as gpd
+from rasterio.merge import merge
+import rasterio
+from concurrent.futures import ThreadPoolExecutor
+
+# Raster processing utilities
+def process_dem(subpoly, buffer_size, dem_file, output_dir, resolution, tile_index):
+    buffered_subpoly = subpoly.buffer(buffer_size)
+
+    dem_bounds = dem_file.rio.bounds()
+    dem_bbox = box(*dem_bounds)
+
+    if not buffered_subpoly.intersects(dem_bbox):
+        print("Polygon does NOT intersect DEM bounds. Skipping.")
+        return None
+
+    buffered_subpoly = buffered_subpoly.intersection(dem_bbox)
+
+    buffered_geojson = mapping(buffered_subpoly)
+    print("Clipping with polygon bounds:", buffered_subpoly.bounds)
+
+    clipped_dem = dem_file.rio.clip([buffered_geojson], crs=dem_file.rio.crs, drop=True)
+
+    # Reproject with explicit resolution and alignment
+    reprojected_dem = clipped_dem.rio.reproject(
+        "EPSG:32612",
+        resolution=(resolution, resolution),
+        align=True
+    )
+
+    # Create hierarchical folder structure
+    parent_dir = os.path.join(output_dir, str(tile_index), "dems_folder", "dem0")
+    os.makedirs(parent_dir, exist_ok=True)
+
+    output_path = os.path.join(parent_dir, "dem0.tif")
+    reprojected_dem.rio.to_raster(output_path, resolution=(resolution, resolution))
+
+    print(f"Saved DEM to: {output_path}")
+    return output_path
 
 def resample_tif(input_path, target_resolution):
     dem = rxr.open_rasterio(input_path, masked=True)
@@ -24,78 +59,16 @@ def resample_tif(input_path, target_resolution):
     print(f"Resampled DEM saved to: {output_path}")
     return output_path
 
-def replace_water_and_fill_nodata(data, water_value=-9999, nodata_value=None, replacement_value=0, fill=True):
-    """
-    Replace water values (-9999) with a fixed value (e.g., 0) and optionally fill NoData values.
-    Also, print the count of NoData values before and after processing.
-    """
-    # Count NoData values before processing
-    nodata_count_before = np.sum(data == nodata_value) if nodata_value is not None else 0
-    water_count_before = np.sum(data == water_value)
-    print(f"Count of NoData values before processing: {nodata_count_before}")
-    print(f"Count of water (-9999) values before processing: {water_count_before}")
-
-    # Replace water values (-9999) with the replacement value (e.g., 0)
-    water_mask = data == water_value
-    data[water_mask] = replacement_value
-
-    # Replace NoData values (if provided) with NaN for processing
-    if nodata_value is not None:
-        nodata_mask = data == nodata_value
-        data[nodata_mask] = np.nan  # Mark NoData values as NaN
-
-    # Fill NoData values using a moving average filter if requested
-    if fill:
-        def fill_function(window):
-            valid_pixels = window[~np.isnan(window)]  # Exclude NaN
-            return np.mean(valid_pixels) if len(valid_pixels) > 0 else np.nan
-
-        data = generic_filter(
-            data, fill_function, size=3, mode='constant', cval=np.nan
-        )
-
-    # Replace any remaining NaN values with the replacement value
-    data = np.nan_to_num(data, nan=replacement_value)
-
-    # Count NoData values after processing
-    nodata_count_after = np.sum(data == nodata_value) if nodata_value is not None else 0
-    print(f"Count of NoData values after processing: {nodata_count_after}")
-
-    return data
-
-def process_dem(subpoly, buffer_size, dem_file, output_dir, resolution):
-    buffered_subpoly = subpoly.buffer(buffer_size)
-
-    dem_bounds = dem_file.rio.bounds()
-    dem_bbox = box(*dem_bounds)
-
-    if not buffered_subpoly.intersects(dem_bbox):
-        print("Polygon does NOT intersect DEM bounds. Skipping.")
-        return None
-
-    buffered_subpoly = buffered_subpoly.intersection(dem_bbox)
-
-    buffered_geojson = mapping(buffered_subpoly)
-    print("Clipping with polygon bounds:", buffered_subpoly.bounds)
-
-    clipped_dem = dem_file.rio.clip([buffered_geojson], crs=dem_file.rio.crs, drop=True)
-
-    reprojected_dem = clipped_dem.rio.reproject(
-        "EPSG:32612",
-        resolution=(resolution, resolution),
-        align=True
-    )
-
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-
-    output_path = os.path.join(output_dir, "processed_dem.tif")
-    reprojected_dem.rio.to_raster(output_path, resolution=(resolution, resolution))
-
-    return output_path
-
 def mosaic_dem_tiles(input_dir, target_crs, resolution, batch_size=500):
+    """
+    Mosaic a large number of DEM tiles in batches to avoid memory issues.
+    
+    Args:
+        input_dir (str): Directory containing DEM tiles.
+        target_crs (str): CRS for the output mosaic.
+        resolution (tuple): Resolution for the mosaic.
+        batch_size (int): Number of tiles to process in each batch.
+    """
     dem_files = []
     for root, _, files in os.walk(input_dir):
         for file in files:
@@ -184,3 +157,52 @@ def mosaic_dem_tiles(input_dir, target_crs, resolution, batch_size=500):
         print(f"Deleted intermediate mosaic: {fp}")
 
     return final_output_path
+
+def load_and_prepare_boundary(boundary_file, target_crs, dem_bounds):
+    """Load and reproject the boundary file, then filter by DEM bounds."""
+    boundary_gdf = gpd.read_file(boundary_file, engine='pyogrio')
+    print("Original boundary file CRS:", boundary_gdf.crs)
+
+    # Filter to include only the US (excluding Alaska and Hawaii)
+    boundary_gdf = boundary_gdf[(boundary_gdf['gu_a3'] == 'USA') & 
+                                (boundary_gdf['name'] != "Alaska") & 
+                                (boundary_gdf['name'] != "Hawaii")]
+    print(f"Filtered {len(boundary_gdf)} polygons for the contiguous US.")
+
+    # Reproject to match DEM CRS
+    boundary_gdf = boundary_gdf.to_crs(target_crs)
+
+    # Filter to include only boundaries intersecting DEM bounds
+    dem_bbox = box(*dem_bounds)
+    boundary_gdf = boundary_gdf[boundary_gdf.intersects(dem_bbox)]
+    print(f"Filtered boundaries intersecting DEM: {len(boundary_gdf)}")
+
+    return boundary_gdf
+
+def read_band(band_path):
+    """Read a single band raster and return its data."""
+    with rasterio.open(band_path) as src:
+        data = src.read(1)
+        print(f"Read band from {band_path}")
+        return data
+
+def create_multiband_raster(output_path, band_paths):
+    if len(band_paths) < 2:
+        raise ValueError("At least two band paths are required to create a multiband raster.")
+    
+    # Open the first band to get metadata
+    with rasterio.open(band_paths[0]) as src:
+        meta = src.meta.copy()
+        meta.update(count=len(band_paths))
+    
+    # Read all bands in parallel
+    with ThreadPoolExecutor() as executor:
+        bands = list(executor.map(read_band, band_paths))
+    
+    # Write the multiband raster
+    with rasterio.open(output_path, "w", **meta) as dest:
+        for idx, band_data in enumerate(bands, start=1):
+            dest.write(band_data, idx)
+            print(f"Added band {idx} to the multiband raster.")
+    
+    print(f"Multiband raster saved to: {output_path}")

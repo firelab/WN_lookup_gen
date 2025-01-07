@@ -16,6 +16,7 @@ pyogrio = "^0.5"
 rasterio = "^1.3"
 pyproj = "^3.6"
 xarray = "^2024.11.0"
+scipy = "^1.10"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

@@ -1,38 +1,17 @@
 import os
-from WindNinja.dem_processing import mosaic_dem_tiles, process_dem, resample_tif
+from raster_utils import process_dem, resample_tif, mosaic_dem_tiles, load_and_prepare_boundary
 import rioxarray as rxr
 from shapely.geometry import box
-import geopandas as gpd
-
-def load_and_prepare_boundary(boundary_file, target_crs, dem_bounds):
-    """Load and reproject the boundary file, then filter by DEM bounds."""
-    boundary_gdf = gpd.read_file(boundary_file, engine='pyogrio')
-    print("Original boundary file CRS:", boundary_gdf.crs)
-
-    # Filter to include only the US (excluding Alaska and Hawaii)
-    boundary_gdf = boundary_gdf[(boundary_gdf['gu_a3'] == 'USA') & 
-                                (boundary_gdf['name'] != "Alaska") & 
-                                (boundary_gdf['name'] != "Hawaii")]
-    print(f"Filtered {len(boundary_gdf)} polygons for the contiguous US.")
-
-    # Reproject to match DEM CRS
-    boundary_gdf = boundary_gdf.to_crs(target_crs)
-
-    # Filter to include only boundaries intersecting DEM bounds
-    dem_bbox = box(*dem_bounds)
-    boundary_gdf = boundary_gdf[boundary_gdf.intersects(dem_bbox)]
-    print(f"Filtered boundaries intersecting DEM: {len(boundary_gdf)}")
-
-    return boundary_gdf
 
 class DEMTiler:
-    def __init__(self, dem_path, resolution, output_dir="out", boundary_file=None):
+    def __init__(self, dem_path, output_dir="out", boundary_file=None, resolution=240):
         self.dem_path = dem_path
         self.output_dir = output_dir
         self.raster_data = rxr.open_rasterio(dem_path, masked=True)
         self.dem_bounds = self.raster_data.rio.bounds()
         self.boundary_file = boundary_file
         self.resolution = resolution
+        self.tile_counter = 0  # To track sequential tile numbers
 
     def process_tiles_by_hybrid(self, tile_size, buffer_size):
         """Hybrid tiling that considers both size and boundary alignment."""
@@ -43,6 +22,7 @@ class DEMTiler:
 
         for i in range(x_tiles + 1):
             for j in range(y_tiles + 1):
+                print(f"Processing tile ({i}, {j})...")
                 tile_bbox = box(
                     x_min + i * tile_size,
                     y_min + j * tile_size,
@@ -51,47 +31,47 @@ class DEMTiler:
                 )
 
                 if self.boundary_file:
+                    print(f"Checking boundary intersections for tile ({i}, {j})...")
                     boundary_gdf = load_and_prepare_boundary(self.boundary_file, self.raster_data.rio.crs, self.dem_bounds)
                     intersecting_boundaries = boundary_gdf[boundary_gdf.intersects(tile_bbox)]
 
-                    for idx, row in intersecting_boundaries.iterrows():
-                        sub_tile_bbox = row.geometry.intersection(tile_bbox)
-                        tile_output_dir = os.path.join(self.output_dir, f"tile_{i}_{j}_boundary_{idx}")
-                        process_dem(sub_tile_bbox, buffer_size, self.raster_data, tile_output_dir, self.resolution)
+                    if intersecting_boundaries.empty:
+                        print(f"No intersecting boundaries found for tile ({i}, {j}). Skipping boundary alignment.")
+                    else:
+                        for idx, row in intersecting_boundaries.iterrows():
+                            print(f"Processing sub-tile ({i}, {j}) for boundary {idx}...")
+                            sub_tile_bbox = row.geometry.intersection(tile_bbox)
+                            process_dem(sub_tile_bbox, buffer_size, self.raster_data, self.output_dir, self.resolution, self.tile_counter)
+                            self.tile_counter += 1
                 else:
-                    tile_output_dir = os.path.join(self.output_dir, f"tile_{i}_{j}")
-                    process_dem(tile_bbox, buffer_size, self.raster_data, tile_output_dir, self.resolution)
+                    print(f"No boundary file provided. Processing tile ({i}, {j}) without boundary alignment.")
+                    process_dem(tile_bbox, buffer_size, self.raster_data, self.output_dir, self.resolution, self.tile_counter)
+                    self.tile_counter += 1
 
     def process_tiles_by_boundary(self, buffer_size):
         if not self.boundary_file:
             raise ValueError("Boundary file is not provided.")
         
+        print("Processing tiles by boundary...")
         boundary_gdf = load_and_prepare_boundary(self.boundary_file, self.raster_data.rio.crs, self.dem_bounds)
 
         for idx, row in boundary_gdf.iterrows():
-            tile_id = str(idx).zfill(7)
-            subpoly = row.geometry
-            tile_output_dir = os.path.join(self.output_dir, tile_id)
-            process_dem(subpoly, buffer_size, self.raster_data, tile_output_dir, self.resolution)
+            print(f"Processing boundary tile {idx}...")
+            process_dem(row.geometry, buffer_size, self.raster_data, self.output_dir, self.resolution, self.tile_counter)
+            self.tile_counter += 1
 
 def main():
-    dem_file_path = 'WindNinjaData/LC20_Elev_220_RS_30m.tif'
+    dem_file_path = 'WindNinjaData/LC20_Elev_220_RS_240m.tif'
     boundary_file = 'WindNinjaData/ne_10m_admin_1_states_provinces_lakes.shp'
 
-    # # Resample DEM
-    # resampled_dem_file_path = resample_tif(dem_file_path, 120)
-
     # Initialize DEMTiler
-    dem_tiler = DEMTiler(dem_file_path, resolution=30, boundary_file=boundary_file)
+    dem_tiler = DEMTiler(dem_file_path, boundary_file=boundary_file, resolution=240)
 
     # Process DEM tiles by hybrid approach (size and boundary alignment)
-    dem_tiler.process_tiles_by_hybrid(tile_size=500000, buffer_size=16000)
-
-    # Process DEM tiles by boundary
-    # dem_tiler.process_tiles_by_boundary(buffer_size=16000)
+    dem_tiler.process_tiles_by_hybrid(tile_size=500000, buffer_size=250000)
 
     # Mosaic processed DEM tiles
-    mosaic_dem_tiles(dem_tiler.output_dir, "EPSG:32612", (30, 30))
+    mosaic_dem_tiles(dem_tiler.output_dir, "EPSG:32612", (240, 240))
 
 if __name__ == "__main__":
     main()
