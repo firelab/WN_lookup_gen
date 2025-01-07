@@ -95,7 +95,7 @@ def process_dem(subpoly, buffer_size, dem_file, output_dir, resolution):
 
     return output_path
 
-def mosaic_dem_tiles(input_dir, target_crs, resolution):
+def mosaic_dem_tiles(input_dir, target_crs, resolution, batch_size=500):
     dem_files = []
     for root, _, files in os.walk(input_dir):
         for file in files:
@@ -106,23 +106,60 @@ def mosaic_dem_tiles(input_dir, target_crs, resolution):
         raise FileNotFoundError(f"No .tif files found in directory: {input_dir}")
 
     print(f"Found {len(dem_files)} DEM files in the directory structure.")
+    
+    # Divide files into batches
+    num_batches = (len(dem_files) + batch_size - 1) // batch_size
+    intermediate_mosaics = []
 
-    src_files_to_mosaic = []
-    for dem_file in dem_files:
-        try:
-            src = rasterio.open(dem_file)
-            src_files_to_mosaic.append(src)
-        except rasterio.errors.RasterioIOError:
-            print(f"Error opening file: {dem_file}. Skipping...")
+    for batch_idx in range(num_batches):
+        print(f"Processing batch {batch_idx + 1} of {num_batches}...")
+        batch_files = dem_files[batch_idx * batch_size : (batch_idx + 1) * batch_size]
 
-    if not src_files_to_mosaic:
-        raise ValueError(f"No valid DEM files found in directory: {input_dir}")
+        # Read and merge the batch
+        src_files_to_mosaic = []
+        for dem_file in batch_files:
+            try:
+                src = rasterio.open(dem_file)
+                src_files_to_mosaic.append(src)
+            except rasterio.errors.RasterioIOError:
+                print(f"Error opening file: {dem_file}. Skipping...")
 
-    print("Merging DEM tiles...")
+        if not src_files_to_mosaic:
+            print(f"No valid files found in batch {batch_idx + 1}. Skipping batch.")
+            continue
+
+        print("Merging batch...")
+        mosaic, out_trans = merge(src_files_to_mosaic, res=resolution)
+
+        # Update metadata for the intermediate mosaic
+        out_meta = src_files_to_mosaic[0].meta.copy()
+        out_meta.update({
+            "driver": "GTiff",
+            "height": mosaic.shape[1],
+            "width": mosaic.shape[2],
+            "transform": out_trans,
+            "crs": target_crs
+        })
+
+        # Save the intermediate mosaic
+        intermediate_path = os.path.join(input_dir, f"batch_{batch_idx + 1}_mosaic.tif")
+        with rasterio.open(intermediate_path, "w", **out_meta) as dest:
+            dest.write(mosaic)
+
+        print(f"Saved intermediate mosaic: {intermediate_path}")
+        intermediate_mosaics.append(intermediate_path)
+
+        # Close the source files
+        for src in src_files_to_mosaic:
+            src.close()
+
+    # Merge intermediate mosaics into the final output
+    print("Merging all intermediate mosaics into final output...")
+    src_files_to_mosaic = [rasterio.open(fp) for fp in intermediate_mosaics]
     mosaic, out_trans = merge(src_files_to_mosaic, res=resolution)
 
+    # Update metadata for the final mosaic
     out_meta = src_files_to_mosaic[0].meta.copy()
-
     out_meta.update({
         "driver": "GTiff",
         "height": mosaic.shape[1],
@@ -131,10 +168,19 @@ def mosaic_dem_tiles(input_dir, target_crs, resolution):
         "crs": target_crs
     })
 
-    output_path = os.path.join(input_dir, "mosaicked_dem.tif")
-    with rasterio.open(output_path, "w", **out_meta) as dest:
+    final_output_path = os.path.join(input_dir, "final_mosaicked_dem.tif")
+    with rasterio.open(final_output_path, "w", **out_meta) as dest:
         dest.write(mosaic)
 
-    print(f"Saved mosaicked DEM to: {output_path}")
+    print(f"Saved final mosaic: {final_output_path}")
 
-    return output_path
+    # Close all intermediate sources
+    for src in src_files_to_mosaic:
+        src.close()
+
+    # Optionally clean up intermediate mosaics
+    for fp in intermediate_mosaics:
+        os.remove(fp)
+        print(f"Deleted intermediate mosaic: {fp}")
+
+    return final_output_path
