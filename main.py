@@ -11,7 +11,7 @@ class DEMTiler:
         self.dem_bounds = self.raster_data.rio.bounds()
         self.boundary_file = boundary_file
         self.resolution = resolution
-        self.tile_counter = 0  # To track sequential tile numbers
+        self.tile_counter = 0
 
     def process_tiles_by_hybrid(self, tile_size, buffer_size):
         """Hybrid tiling that considers both size and boundary alignment."""
@@ -61,17 +61,17 @@ class DEMTiler:
             self.tile_counter += 1
 
 def main():
-    dem_file_path = 'WindNinjaData/LC20_Elev_220_RS_240m.tif'
+    dem_file_path = 'WindNinjaData/2023_lcp.tif'
     boundary_file = 'WindNinjaData/ne_10m_admin_1_states_provinces_lakes.shp'
 
     # Initialize DEMTiler
-    dem_tiler = DEMTiler(dem_file_path, boundary_file=boundary_file, resolution=240)
+    dem_tiler = DEMTiler(dem_file_path, boundary_file=boundary_file, resolution=30)
 
     # Process DEM tiles by hybrid approach (size and boundary alignment)
-    dem_tiler.process_tiles_by_hybrid(tile_size=500000, buffer_size=250000)
+    dem_tiler.process_tiles_by_hybrid(tile_size=32000, buffer_size=16000)
 
     # Mosaic processed DEM tiles
-    mosaic_dem_tiles(dem_tiler.output_dir, "EPSG:32612", (240, 240))
+    # mosaic_dem_tiles(dem_tiler.output_dir, "EPSG:32612", (30, 30))
 
 if __name__ == "__main__":
     main()
