@@ -176,16 +176,27 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         resampleAlg=gdal.GRA_NearestNeighbour
     )
 
-    # Reproject given percentage overlapped AOI Tile to UTM
-    utm_overlap_path = os.path.join(utm_overlap_dir, f"utm_overlap_aoi_{tile_index}_epsg{epsg_utm}.tif")
+    # Reproject given percentage overlapped AOI Tile to UTM and force 30m resolution
+    temp_utm_overlap_path = os.path.join(utm_overlap_dir, f"temp_utm_overlap_aoi_{tile_index}_epsg{epsg_utm}.tif")
     gdal.Warp(
-        utm_overlap_path,
+        temp_utm_overlap_path,
         temp_overlap_albers,
         dstSRS=f"EPSG:{epsg_utm}",
         dstNodata=nodata_value,
         warpOptions=['INIT_DEST=NO_DATA'],
         resampleAlg=gdal.GRA_NearestNeighbour
     )
+    utm_overlap_path = os.path.join(utm_overlap_dir, f"utm_overlap_aoi_{tile_index}_epsg{epsg_utm}.tif")
+    gdal.Warp(
+        utm_overlap_path,
+        temp_utm_overlap_path,
+        xRes=30,
+        yRes=30,
+        dstSRS=f"EPSG:{epsg_utm}",
+        dstNodata=nodata_value,
+        resampleAlg=gdal.GRA_NearestNeighbour
+    )
+    os.remove(temp_utm_overlap_path)
     
     # Compute Final Square and not tilted dem in UTM
     utm_overlap_ds = gdal.Open(utm_overlap_path)
@@ -204,7 +215,7 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
     parent_dir = os.path.join(final_utm_dir, str(tile_index))
     base_output_dir = os.path.join(parent_dir, "dems_folder", "dem0")
     os.makedirs(base_output_dir, exist_ok=True)
-    final_utm_path = os.path.join(base_output_dir, "dem0.tif")
+    final_utm_path = os.path.join(base_output_dir, "dem0_temp.tif")
 
     gdal.Warp(
         final_utm_path,
@@ -215,12 +226,23 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         warpOptions=['INIT_DEST=NO_DATA'],
         resampleAlg=gdal.GRA_NearestNeighbour
     )
+    final_resampled_utm_path = os.path.join(base_output_dir, "dem0.tif")
+    gdal.Warp(
+        final_resampled_utm_path,
+        final_utm_path,
+        xRes=30,
+        yRes=30,
+        dstSRS=f"EPSG:{epsg_utm}",
+        dstNodata=nodata_value,
+        resampleAlg=gdal.GRA_NearestNeighbour
+    )
 
+    os.remove(final_utm_path)
     os.remove(temp_350_albers)
     os.remove(temp_overlap_albers)
     os.remove(temp_utm_350)
 
-    print(f"[INFO] Final Square UTM Tile Saved: {final_utm_dir}")
+    print(f"[INFO] Final Square UTM Tile Saved: {final_resampled_utm_path}")
 
 def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max_tiles=None):
     """Generate raster tiles with overlap and reproject to UTM."""
@@ -296,6 +318,6 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
     print(f"[INFO] Total tiles generated: {tile_count}/{estimated_total_tiles}")
 
 if __name__ == "__main__":
-    input_raster_path =  "/media/gunjan/C8000C00000BF46A/Users/dgh00/OneDrive/Desktop/CONUS2022/2023_lcp.tif"
-    output_directory = "tiles_output"
+    input_raster_path =  "/mnt/c/Users/dgh00/OneDrive/Desktop/CONUS2022/2023_lcp.tif"
+    output_directory = "/mnt/d/tiles_washington"
     create_tiles(input_raster_path, output_directory, 64, 25, 350)
