@@ -56,7 +56,7 @@ def clip_and_resample_and_reproject(input_raster, output_raster, aoi_mask, aoi_r
 
 def process_tile(folder, base_dir, aoi_tiles_dir, output_dir):
     """Processes a single tile - Clip, resample, and reproject"""
-    folder_path = os.path.join(base_dir, folder, "dems_folder", "dem0", "mass", "0-0-deg")
+    folder_path = os.path.join(base_dir, folder, "dems_folder", "dem0", "momentum", "0-0-deg")
     if not os.path.exists(folder_path):
         return
     for file in os.listdir(folder_path):
@@ -112,7 +112,7 @@ def clip_tile(tile_path):
     max_x = gt[0] + (width * 0.85 * gt[1])
     min_y = gt[3] + (height * 0.85 * gt[5])
     clipped_tile_path = tile_path.replace("_reproj.tif", "_clipped.tif")
-    gdal.Warp(clipped_tile_path, tile_path, outputBounds=(min_x, min_y, max_x, min_y),
+    gdal.Warp(clipped_tile_path, tile_path, outputBounds=(min_x, min_y, max_x, max_y),
               width=new_width, height=new_height, dstNodata=-9999)
     print(f"[INFO] Clipped tile saved: {clipped_tile_path}")
     return clipped_tile_path
@@ -149,6 +149,6 @@ def mosaic_tiles(output_dir, final_mosaic_path):
 if __name__ == "__main__":
     base_dir = "/mnt/d/CONUS"
     aoi_tiles_dir = "/mnt/d/tiles/utm_aoi_tiles"
-    output_dir = "/mnt/d/tiles/windNinjax_tiles_mass"
-    process_tiles(base_dir, aoi_tiles_dir, output_dir)
-    # mosaic_tiles(output_dir, os.path.join(output_dir, "final_mosaic_w_smoothing_mass.tif"))
+    output_dir = "/mnt/d/tiles/windNinjax_tiles_momentum"
+    # process_tiles(base_dir, aoi_tiles_dir, output_dir)
+    mosaic_tiles(output_dir, os.path.join(output_dir, "final_mosaic_w_smoothing_momentum.tif"))
