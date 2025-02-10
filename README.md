@@ -55,7 +55,7 @@ The `conus.sbatch` script runs WindNinja simulations on an HPC cluster using Slu
 
 ### **Modify Paths**
 Before running the WindNinja simulations, ensure that the paths in `conus.sbatch` are correctly set according to your environment:
-- **SHARED_STORAGE**: Path where WindNinja input/output files are stored.
+- **SHARED_STORAGE**: Path where WindNinja output folder final_utm_tiles is stored
 - **WINDNINJA_SIF**: Path to the Singularity image for WindNinja.
 - **Scripts and Configs**: Ensure `run_caryWnCfg3.py`, `run.sh`, and `base_cli.cfg` exist in the specified directory.
 
