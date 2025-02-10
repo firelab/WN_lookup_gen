@@ -90,7 +90,7 @@ output_dir = <path>
 
 ### **Run:**
 ```python
-python3 prepare_dems.py
+python3 postprocess.py
 ```
 
 ### **You will get below file structure**
