@@ -3,6 +3,12 @@ import numpy as np
 import subprocess
 from osgeo import gdal, ogr, osr
 
+washington_tiles = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 
+                    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 
+                    53, 54, 55, 56, 57, 58, 59, 84, 85, 86, 87, 88, 89, 90, 115, 116, 117, 118, 119, 120, 121, 122, 
+                    146, 147, 148, 149, 150, 151, 152, 153, 180, 181, 182, 183, 184, 185, 186, 187, 214, 215, 216, 
+                    217, 218, 219, 220, 221, 249, 250, 251, 252, 253, 254, 255, 256, 286, 287, 288, 289, 290}
+
 def remove_temp_files(*file_patterns):
     """Removes temporary files matching the given patterns."""
     for file_pattern in file_patterns:
@@ -125,7 +131,10 @@ def process_tiles(base_dir, aoi_tiles_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
     
     for folder in sorted(os.listdir(base_dir)):
-        folder_path = os.path.join(base_dir, folder, "dems_folder", "output")
+        if not folder.isdigit() or int(folder) not in washington_tiles:
+            continue
+
+        folder_path = os.path.join(base_dir, folder, "dems_folder", "dem0", "momentum", "0-0-deg")
         if not os.path.exists(folder_path):
             continue
 
@@ -173,4 +182,4 @@ def process_tiles(base_dir, aoi_tiles_dir, output_dir):
     print("[INFO] Postprocessing complete.")
 
 if __name__ == "__main__":
-    process_tiles("/home/gunjan/Desktop/washington", "/home/gunjan/Desktop/washington_prep_dems/utm_aoi_tiles", "/home/gunjan/Desktop/washington_prep_dems/final_clipped_tiles")
+    process_tiles("/mnt/d/CONUS", "/mnt/d/tiles/utm_aoi_tiles", "/mnt/d/tiles/windNinja_tiles")
