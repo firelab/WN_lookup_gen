@@ -1,6 +1,7 @@
 import os
 import shutil
 import numpy as np
+import multiprocessing as mp
 from osgeo import gdal, osr, ogr
 
 def get_nodata_value(raster_path):
@@ -244,9 +245,9 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
 
     print(f"[INFO] Final Square UTM Tile Saved: {final_resampled_utm_path}")
 
-def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max_tiles=None):
-    """Generate raster tiles with overlap and reproject to UTM."""
-    
+def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max_tiles=None, num_workers=8):
+    """Generate raster tiles with overlap and reproject to UTM in batches of 8 tiles at a time."""
+
     clean_output_directory(output_dir)
     original_tiles_dir = os.path.join(output_dir, "original_tiles")
     os.makedirs(original_tiles_dir, exist_ok=True)
@@ -256,14 +257,13 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
     pixel_size = transform[1]
     tile_size_px = int((tile_size_km * 1000) / pixel_size)
 
-    # Compute total number of tiles in x and y directions
     x_size, y_size = dataset.RasterXSize, dataset.RasterYSize
     nodata_value = get_nodata_value(input_raster)
 
     print(f"[DEBUG] Raster size: {x_size} x {y_size} pixels")
     print(f"[DEBUG] Tile size: {tile_size_px} x {tile_size_px} pixels")
 
-    total_tiles_x = (x_size + tile_size_px - 1) // tile_size_px  
+    total_tiles_x = (x_size + tile_size_px - 1) // tile_size_px
     total_tiles_y = (y_size + tile_size_px - 1) // tile_size_px
     estimated_total_tiles = total_tiles_x * total_tiles_y
 
@@ -273,6 +273,7 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
         max_tiles = estimated_total_tiles
 
     tile_count = 0
+    tile_data_list = []
 
     for x in range(0, x_size, tile_size_px):
         for y in range(0, y_size, tile_size_px):
@@ -291,17 +292,17 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
                 band = tile_ds.GetRasterBand(band_index)
                 data = band.ReadAsArray()
 
-                if data is not None and np.any(data != -9999):  
+                if data is not None and np.any(data != -9999):
                     contains_valid_data = True
                     data = replace_ocean_values(data, band_index, nodata_value)
                     band.WriteArray(data)
 
-            tile_ds = None  
+            tile_ds = None
 
             if not contains_valid_data:
-                os.remove(output_tile)  
+                os.remove(output_tile)
                 print(f"[INFO] Skipped tile {output_tile} (contains only NoData).")
-                continue  
+                continue
 
             min_x = transform[0] + x * pixel_size
             max_x = min_x + tile_size_px * pixel_size
@@ -309,15 +310,19 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
             min_y = max_y - tile_size_px * abs(transform[5])
             tile_bounds = (min_x, min_y, max_x, max_y)
 
-            # **Generate overlapped and reprojected tile**
-            overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_count, overlap_percentage)
-
+            tile_data_list.append((input_raster, tile_bounds, output_dir, tile_count, overlap_percentage))
             print(f"[INFO] Tile {tile_count} completed.")
             tile_count += 1
+
+            # Process tiles every 8 iterations
+            if len(tile_data_list) == 8 or tile_count >= max_tiles:
+                with mp.Pool(processes=num_workers) as pool:
+                    pool.starmap(overlap_and_reproject, tile_data_list)
+                tile_data_list = []  # Clear the list for the next batch
 
     print(f"[INFO] Total tiles generated: {tile_count}/{estimated_total_tiles}")
 
 if __name__ == "__main__":
     input_raster_path =  "/mnt/c/Users/dgh00/OneDrive/Desktop/CONUS2022/2023_lcp.tif"
     output_directory = "/mnt/d/tiles_washington"
-    create_tiles(input_raster_path, output_directory, 64, 25, 350)
+    create_tiles(input_raster_path, output_directory, 64, 25, 350, num_workers=8)
