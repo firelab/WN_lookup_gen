@@ -12,6 +12,11 @@ Numpy
 ## **Step 1: Prepare DEMs for WindNinja**
 This step generates UTM-projected tiles with overlap for WindNinja input.
 
+## **Strategy to geenrate square tile in UTM projection to get rid of NoData**
+<img src="https://github.com/user-attachments/assets/a61b526b-cffa-4156-a64e-70f14d6673ca" width="600">
+
+(Note: we are cliping out above square tile from 350% overlapped tile. I am generating 350% overlapped tile as I won't have whole input landscape file of CONUS(237GB) into my memory to get data after. I am saving it as intermediatory output and deleting it after getting square tile.)
+
 ### **Modify Paths:**
 Edit `prepare_dems.py` and set:
 ```python
