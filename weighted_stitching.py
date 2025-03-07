@@ -250,7 +250,6 @@ def wind_uv_to_sd(u, v):
     inter_dir = np.where(inter_dir < 0, inter_dir + 360.0, inter_dir)
 
     direction = xy_to_n(inter_dir)  # Convert back to North-based angle
-    print(f"[DEBUG] wind_uv_to_sd: U={u}, V={v}, Intermediate Dir={inter_dir}")
     return speed, direction
 
 def process_single_tile(args):
@@ -379,8 +378,6 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     v_avg = np.zeros_like(v_sum_band)
     u_avg[valid_mask] = u_sum_band[valid_mask] / sum_weights_band[valid_mask]
     v_avg[valid_mask] = v_sum_band[valid_mask] / sum_weights_band[valid_mask]
-    u_avg[np.abs(u_avg) < 1e-5] = 0
-    print(f"[DEBUG] Corrected wind_uv_to_sd: U={u_avg}, V={v_avg}, Dir={inter_dir}")
 
     if debug:
         final_speed, final_dir = wind_uv_to_sd(u_avg, v_avg)
