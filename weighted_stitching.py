@@ -202,40 +202,56 @@ def convert_to_latlon(x, y, src_epsg=5070, dest_epsg=4326):
     
     return lon, lat
 
+def n_to_xy(north_angle):
+    """Convert wind direction from North-based (meteorological) to Cartesian XY system."""
+    if np.any((north_angle < 0.0) | (north_angle > 360.0)):
+        return -1  # Mimic C++ return behavior
+
+    xy_angle = 450.0 - north_angle
+    xy_angle = np.where(xy_angle > 360.0, xy_angle - 360.0, xy_angle)
+    return xy_angle
+
+def xy_to_n(xy_angle):
+    """Convert from Cartesian XY to North-based wind direction."""
+    if np.any((xy_angle < 0.0) | (xy_angle > 360.0)):
+        return -1  # Mimic C++ return behavior
+
+    north_angle = 450.0 - xy_angle
+    north_angle = np.where(north_angle > 360.0, north_angle - 360.0, north_angle)
+    return north_angle
+
 def wind_sd_to_uv(speed, direction):
-    direction = np.radians(direction)
-    u = -speed * np.sin(direction)
-    v = -speed * np.cos(direction)
+    """Convert wind speed and direction (FROM North) to U, V components."""
+    if np.any(direction > 360.0):
+        direction = np.where(direction > 360.0, direction - 360.0, direction)
+        if np.any(direction > 360.0):
+            raise ValueError("Direction greater than 360 degrees in wind_sd_to_uv().")
+
+    if np.any(direction < 0.0):
+        raise ValueError("Direction less than zero degrees in wind_sd_to_uv().")
+
+    direction = np.where(direction == 360.0, 0.0, direction)  # Normalize 360° to 0°
+    
+    u = np.where((direction == 0.0) | (direction == 180.0), 
+                 0.0, 
+                 -speed * np.sin(np.radians(direction)))
+
+    v = np.where((direction == 90.0) | (direction == 270.0), 
+                 0.0, 
+                 -speed * np.cos(np.radians(direction)))
+
     return u, v
 
 def wind_uv_to_sd(u, v):
+    """Convert U, V components back to wind speed and direction."""
     speed = np.sqrt(u**2 + v**2)
-    direction = np.degrees(np.arctan2(-u, -v))
-    direction = np.where(direction < 0, direction + 360, direction)
+    inter_dir = np.degrees(np.arctan2(v, u))
+    inter_dir = inter_dir - 180.0
+    inter_dir = np.where(inter_dir < 0, inter_dir + 360.0, inter_dir)
+
+    direction = xy_to_n(inter_dir)  # Convert back to North-based angle
+    print(f"[DEBUG] wind_uv_to_sd: U={u}, V={v}, Intermediate Dir={inter_dir}")
     return speed, direction
-
-def test_wind_conversions():
-    test_cases = [
-        (10.0, 0.0),    # From North
-        (10.0, 90.0),   # From East
-        (10.0, 180.0),  # From South
-        (10.0, 270.0),  # From West
-        (5.0, 45.0),    # From Northeast
-        (5.0, 135.0),   # From Southeast
-        (5.0, 225.0),   # From Southwest
-        (5.0, 315.0),   # From Northwest
-    ]
-
-    print("\n[TESTING WIND CONVERSIONS]")
-    for speed, direction in test_cases:
-        u, v = wind_sd_to_uv(speed, direction)
-        speed_rec, direction_rec = wind_uv_to_sd(u, v)
-
-        print(f"Input: Speed={speed:.2f} m/s, Direction={direction:.2f}°")
-        print(f"Converted to: U={u:.2f}, V={v:.2f}")
-        print(f"Back to Speed={speed_rec:.2f}, Direction={direction_rec:.2f}°")
-        print(f"✅ Passed? {'YES' if np.isclose(speed, speed_rec, atol=0.01) and np.isclose(direction, direction_rec, atol=0.1) else '❌ NO'}")
-        print("-" * 50)
 
 def process_single_tile(args):
     tile_path, mosaic_metadata, weight_matrix = args
@@ -324,7 +340,7 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
 
     tile_contributions = {}
 
-    with Pool(processes=8) as pool:
+    with Pool(processes=30) as pool:
         for result in pool.imap_unordered(process_single_tile, args):
             if result is None:
                 continue
@@ -355,11 +371,16 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
 
     overlapping_cells = {k: v for k, v in overlapping_cells.items() if tile_contributions[k] > 1}
 
+    print(f"[DEBUG] Before Normalization -> Sum U: {u_sum_band.min()} to {u_sum_band.max()}")
+    print(f"[DEBUG] Before Normalization -> Sum V: {v_sum_band.min()} to {v_sum_band.max()}")
+
     valid_mask = sum_weights_band > 0
     u_avg = np.zeros_like(u_sum_band)
     v_avg = np.zeros_like(v_sum_band)
     u_avg[valid_mask] = u_sum_band[valid_mask] / sum_weights_band[valid_mask]
     v_avg[valid_mask] = v_sum_band[valid_mask] / sum_weights_band[valid_mask]
+    u_avg[np.abs(u_avg) < 1e-5] = 0
+    print(f"[DEBUG] Corrected wind_uv_to_sd: U={u_avg}, V={v_avg}, Dir={inter_dir}")
 
     if debug:
         final_speed, final_dir = wind_uv_to_sd(u_avg, v_avg)
@@ -458,7 +479,7 @@ def main():
         summary_csv = os.path.join(output_directory, f"summary_pixels_{direction}.csv")
 
         # Process tiles for the current wind direction
-        process_overlapping_tiles(tiles_directory, mosaic_metadata, output_raster, debug_csv, summary_csv)
+        process_overlapping_tiles(tiles_directory, mosaic_metadata, output_raster, debug_csv, summary_csv, debug=False)
 
 if __name__ == "__main__":
     main()
