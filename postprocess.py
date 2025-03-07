@@ -1,6 +1,6 @@
 """
  * Project:  WN_Lookup_Gen
- * Purpose:  Python script for converting tiles from UTM to conus albers
+ * Purpose:  Python script for converting tiles(Windninja asc and prj files) from UTM to conus albers
  * Author: Gunjan Dayani <gunjandayani015@gmail.com>
 
  ******************************************************************************
