@@ -34,7 +34,7 @@ import numpy as np
 
 gdal.UseExceptions()
 
-tiles = set(range(350))
+tiles = set(range(2500))
 
 def remove_temp_files(*file_patterns):
     for file_pattern in file_patterns:
@@ -42,11 +42,27 @@ def remove_temp_files(*file_patterns):
             os.remove(file_pattern)
             print(f"[INFO] Removed temporary file: {file_pattern}")
 
+def convert_speed_dir_to_uv(speed_array, direction_array):
+    """
+    Converts wind speed and direction grids into U and V wind components.
+    - U: West-East component
+    - V: South-North component
+    """
+    if speed_array.shape != direction_array.shape:
+        raise ValueError("Speed and Direction arrays must have the same shape.")
+
+    direction_radians = np.radians(270.0 - direction_array)
+
+    u_array = -speed_array * np.cos(direction_radians)
+    v_array = -speed_array * np.sin(direction_radians)
+
+    return u_array, v_array
+
 def make_tif(vel_asc, ang_asc, prj_file, output_tif):
     """
     Converts velocity and direction ASC files into a two-band GeoTIFF.
-    - Band 1: Wind speed (_vel.asc)
-    - Band 2: Wind direction (_ang.asc)
+    - Band 1: U wind component
+    - Band 2: V wind component
     """
     if not (os.path.exists(vel_asc) and os.path.exists(ang_asc) and os.path.exists(prj_file)):
         print(f"[WARNING] Missing required files: {vel_asc}, {ang_asc}, {prj_file}. Skipping.")
@@ -63,34 +79,46 @@ def make_tif(vel_asc, ang_asc, prj_file, output_tif):
         return metadata
 
     metadata = read_asc_metadata(vel_asc)
+
     with open(prj_file, 'r') as prj:
         projection_wkt = prj.read()
+
+    # Load ASC files and convert speed/direction to U/V components
     speed_array = np.loadtxt(vel_asc, skiprows=6)
     direction_array = np.loadtxt(ang_asc, skiprows=6)
+    u_array, v_array = convert_speed_dir_to_uv(speed_array, direction_array)
+
     os.makedirs(os.path.dirname(output_tif), exist_ok=True)
+
     driver = gdal.GetDriverByName("GTiff")
     out_ds = driver.Create(
         output_tif,
         metadata["ncols"], metadata["nrows"],
-        2,
+        2,  # Two bands: U and V
         gdal.GDT_Float32,
         options=["COMPRESS=LZW"]
     )
+
     cellsize = metadata["cellsize"]
     geotransform = (
         metadata["xllcorner"], cellsize, 0,
         metadata["yllcorner"] + metadata["nrows"] * cellsize, 0, -cellsize
     )
+
     out_ds.SetGeoTransform(geotransform)
     out_ds.SetProjection(projection_wkt)
+
     band1 = out_ds.GetRasterBand(1)
-    band1.WriteArray(speed_array)
+    band1.WriteArray(u_array)
     band1.SetNoDataValue(-9999)
+
     band2 = out_ds.GetRasterBand(2)
-    band2.WriteArray(direction_array)
+    band2.WriteArray(v_array)
     band2.SetNoDataValue(-9999)
-    band1, band2, out_ds = None, None, None
-    print(f"[INFO] Created TIF: {output_tif}")
+
+    band1, band2, out_ds = None, None, None  # Close dataset
+
+    print(f"[INFO] Created TIF: {output_tif} (U in Band 1, V in Band 2)")
 
     return output_tif
 
@@ -230,9 +258,9 @@ def process_tiles(base_dir, aoi_tiles_dir, output_dir, directions):
     print("[INFO] Processing complete.")
 
 if __name__ == "__main__":
-    base_dir = "/mnt/d/CONUS0"
-    aoi_tiles_dir = "/mnt/d/tiles/utm_aoi_tiles"
-    output_dir = "/mnt/d/processed_CONUS0"
+    base_dir = "/mnt/d/CONUS"
+    aoi_tiles_dir = "/mnt/d/tiles/utm_aoi"
+    output_dir = "/mnt/d/processed_CONUS"
     directions = [
         "0-0-deg", "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
         "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",

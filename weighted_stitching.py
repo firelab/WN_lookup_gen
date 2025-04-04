@@ -202,54 +202,9 @@ def convert_to_latlon(x, y, src_epsg=5070, dest_epsg=4326):
     
     return lon, lat
 
-def n_to_xy(north_angle):
-    """Convert wind direction from North-based (meteorological) to Cartesian XY system."""
-    if np.any((north_angle < 0.0) | (north_angle > 360.0)):
-        return -1  # Mimic C++ return behavior
-
-    xy_angle = 450.0 - north_angle
-    xy_angle = np.where(xy_angle > 360.0, xy_angle - 360.0, xy_angle)
-    return xy_angle
-
-def xy_to_n(xy_angle):
-    """Convert from Cartesian XY to North-based wind direction."""
-    if np.any((xy_angle < 0.0) | (xy_angle > 360.0)):
-        return -1  # Mimic C++ return behavior
-
-    north_angle = 450.0 - xy_angle
-    north_angle = np.where(north_angle > 360.0, north_angle - 360.0, north_angle)
-    return north_angle
-
-def wind_sd_to_uv(speed, direction):
-    """Convert wind speed and direction (FROM North) to U, V components."""
-    if np.any(direction > 360.0):
-        direction = np.where(direction > 360.0, direction - 360.0, direction)
-        if np.any(direction > 360.0):
-            raise ValueError("Direction greater than 360 degrees in wind_sd_to_uv().")
-
-    if np.any(direction < 0.0):
-        raise ValueError("Direction less than zero degrees in wind_sd_to_uv().")
-
-    direction = np.where(direction == 360.0, 0.0, direction)  # Normalize 360° to 0°
-    
-    u = np.where((direction == 0.0) | (direction == 180.0), 
-                 0.0, 
-                 -speed * np.sin(np.radians(direction)))
-
-    v = np.where((direction == 90.0) | (direction == 270.0), 
-                 0.0, 
-                 -speed * np.cos(np.radians(direction)))
-
-    return u, v
-
-def wind_uv_to_sd(u, v):
-    """Convert U, V components back to wind speed and direction."""
-    speed = np.sqrt(u**2 + v**2)
-    inter_dir = np.degrees(np.arctan2(v, u))
-    inter_dir = inter_dir - 180.0
-    inter_dir = np.where(inter_dir < 0, inter_dir + 360.0, inter_dir)
-
-    direction = xy_to_n(inter_dir)  # Convert back to North-based angle
+def wind_uv_to_sd(u: np.ndarray, v: np.ndarray):
+    speed = np.sqrt(np.square(u) + np.square(v))
+    direction = (270.0 - np.degrees(np.arctan2(v, u))) % 360.0
     return speed, direction
 
 def process_single_tile(args):
@@ -274,8 +229,8 @@ def process_single_tile(args):
     row_start = max(0, round((mosaic_metadata["yllcorner"] + mosaic_metadata["nrows"] * mosaic_metadata["cellsize"] - tile_y_max) / mosaic_metadata["cellsize"]))
     row_end = min(mosaic_metadata["nrows"], round((mosaic_metadata["yllcorner"] + mosaic_metadata["nrows"] * mosaic_metadata["cellsize"] - tile_y_min) / mosaic_metadata["cellsize"]))
 
-    tile_velocity = ds_tile.GetRasterBand(1).ReadAsArray()
-    tile_direction = ds_tile.GetRasterBand(2).ReadAsArray()
+    tile_u = ds_tile.GetRasterBand(1).ReadAsArray()
+    tile_v = ds_tile.GetRasterBand(2).ReadAsArray()
 
     tile_x_center = (tile_x_min + tile_x_max) / 2
     tile_y_center = (tile_y_min + tile_y_max) / 2
@@ -289,18 +244,13 @@ def process_single_tile(args):
             tile_pixel_y = int((tile_y_max - cell_y) / tile_cell_size)
 
             if 0 <= tile_pixel_x < tile_x_size and 0 <= tile_pixel_y < tile_y_size:
-                velocity = tile_velocity[tile_pixel_y, tile_pixel_x]
-                direction = tile_direction[tile_pixel_y, tile_pixel_x]
-
-                if velocity == -9999 or direction == -9999:
-                    continue  # Skip NoData cells from tiles
+                u = tile_u[tile_pixel_y, tile_pixel_x]
+                v = tile_v[tile_pixel_y, tile_pixel_x]
 
                 weight = weight_matrix[tile_pixel_y, tile_pixel_x]
 
                 if weight == 0:
                     continue
-
-                u, v = wind_sd_to_uv(velocity, direction)
 
                 results.append((row, col, u * weight, v * weight, weight, tile_id))
 
@@ -429,16 +379,15 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
 def main():
     # test_wind_conversions()
     base_raster = "/mnt/c/Users/dgh00/OneDrive/Desktop/mossaics/ref_raster_120m.tif"
-    output_directory = "/mnt/c/Users/dgh00/OneDrive/Desktop/mossaics"
-    tiles_base_directory = "/mnt/d/processed_CONUS0"
+    output_directory = "/mnt/c/Users/dgh00/OneDrive/Desktop/test_mossaics"
+    tiles_base_directory = "/mnt/d/processed_CONUS"
 
     # List of wind directions
-    # wind_directions = [
-    #     "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
-    #     "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",
-    #     "225-0-deg", "247-5-deg", "270-0-deg", "292-5-deg", "315-0-deg", "337-5-deg"
-    # ]
-    wind_directions = [ "0-0-deg" ]
+    wind_directions = [
+        "0-0-deg", "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
+        "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",
+        "225-0-deg", "247-5-deg", "270-0-deg", "292-5-deg", "315-0-deg", "337-5-deg"
+    ]
     # Open base raster to extract metadata
     src_ds = gdal.Open(base_raster)
     if src_ds is None:
