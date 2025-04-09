@@ -190,6 +190,7 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
     min_lon, min_lat = albers_to_latlon(expanded_bounds[0], expanded_bounds[1])
     max_lon, max_lat = albers_to_latlon(expanded_bounds[2], expanded_bounds[3])
     center_lon, center_lat = (min_lon + max_lon) / 2, (min_lat + max_lat) / 2
+    print(f"center_lon, center_lat : {center_lon, center_lat}")
     epsg_utm = determine_utm_zone(center_lon, center_lat)
 
     print("Determined UTM Zone: " + str(epsg_utm))

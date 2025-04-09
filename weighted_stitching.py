@@ -369,9 +369,9 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     ds.GetRasterBand(2).SetNoDataValue(-9999)
     print("[INFO] Direction band written")
 
-    ds.GetRasterBand(3).WriteArray(weight_band)
-    ds.GetRasterBand(3).SetNoDataValue(-9999)
-    print("[INFO] Weight band written")
+    # ds.GetRasterBand(3).WriteArray(weight_band)
+    # ds.GetRasterBand(3).SetNoDataValue(-9999)
+    # print("[INFO] Weight band written")
 
     ds = None
     print("[INFO] Mosaic processing completed successfully!")

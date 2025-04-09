@@ -228,7 +228,7 @@ def process_tile(folder, base_dir, aoi_tiles_dir, output_dir, directions):
             reprojected_tif = os.path.join(tile_wind_output_dir, f"{folder}_reproj.tif")
             final_resampled_raster = os.path.join(tile_wind_output_dir, f"{folder}.tif")
 
-            aoi_mask_shp = f"/tmp/aoi_mask_{folder}.shp"
+            aoi_mask_shp = os.path.join("/tmp", f"aoi_mask_{folder}_{os.getpid()}.shp")
             remove_temp_files(aoi_mask_shp)
 
             # Generate a mask from the AOI tile
