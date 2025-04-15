@@ -64,11 +64,6 @@ def get_raster_bounds(raster_path):
     ds = None
     return min_x, min_y, max_x, max_y
 
-def replace_ocean_values(array, band_index, nodata_value):
-    """Replaces ocean values (-9999) while preserving other data."""
-    replacements = [0, 0, 0, 98, 0, 0, 0, 0]
-    return np.where((array == -9999) & (array != nodata_value), replacements[band_index - 1], array)
-
 def albers_to_latlon(x, y):
     """Convert Albers Equal Area coordinates to Lat/Lon using GDAL transformation."""
     source_srs = osr.SpatialReference()
@@ -76,9 +71,9 @@ def albers_to_latlon(x, y):
     target_srs = osr.SpatialReference()
     target_srs.ImportFromEPSG(4326)  # WGS 84 (Lat/Lon)
     transform = osr.CoordinateTransformation(source_srs, target_srs)
-    lon, lat, _ = transform.TransformPoint(x, y)
+    lat, lon, _ = transform.TransformPoint(x, y)
     print(f"[DEBUG] Converted Albers to Lat/Lon: ({x}, {y}) -> ({lat}, {lon})")
-    return lon, lat
+    return lat, lon
 
 def clean_output_directory(output_dir):
     """Delete and recreate the output directory to ensure a clean start."""
@@ -122,7 +117,7 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
     center_x, center_y = (min_x + max_x) / 2, (min_y + max_y) / 2
 
     # Compute 350% Overlapped Bounds in Albers
-    # As we are not taking whole input into memory, after deciding not tilted tile bounds(perfect square) 
+    # As we are not taking whole input into memory, after deciding not tilted tile bounds(perfect square)
     # in UTM we need to have enough data from which we can clip data. So this is kind of temporary lookup tiles
     # I have calculated this number 350 so that we have enough data to clip from.
     expanded_width = (max_x - min_x) * 4.5
@@ -148,8 +143,8 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
     )
     print(f"[INFO] {overlap}% AOI Bounds in Albers: {aoi_bounds}")
 
-    # Save Temporary Overlapped Albers Tiles(350% and given overlap percentage) and replace Ocean values
-    # So that we don't have -9999 values (other than NoData: 32767) which is present in input landscape file. 
+    # Save Temporary Overlapped Albers Tiles(350% and given overlap percent
+    # So that we don't have -9999 values (other than NoData: 32767) which is present in input landscape file.
     temp_350_albers = os.path.join(temp_albers_dir, f"temp_350_albers_{tile_index}.tif")
     gdal.Warp(
         temp_350_albers,
@@ -157,15 +152,20 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         outputBounds=expanded_bounds,
         dstSRS="EPSG:5070",
         dstNodata=nodata_value,
-        warpOptions=['INIT_DEST=-9999'],
+        warpOptions=[f'INIT_DEST={nodata_value}'],
         resampleAlg=gdal.GRA_NearestNeighbour
     )
     ds = gdal.Open(temp_350_albers, gdal.GA_Update)
     for band_index in range(1, ds.RasterCount + 1):
         band = ds.GetRasterBand(band_index)
-        array = band.ReadAsArray()
-        array = replace_ocean_values(array, band_index, nodata_value)
-        band.WriteArray(array)
+        arr = band.ReadAsArray()
+
+        # Replace rogue -9999 values and enforce correct NoData value
+        arr[(arr == -9999) | (arr == band.GetNoDataValue())] = nodata_value
+        band.WriteArray(arr)
+        band.SetNoDataValue(nodata_value)
+
+    ds.FlushCache()
     ds = None
 
     temp_overlap_albers = os.path.join(temp_albers_dir, f"temp_overlap_albers_{tile_index}.tif")
@@ -175,15 +175,20 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         outputBounds=aoi_bounds,
         dstSRS="EPSG:5070",
         dstNodata=nodata_value,
-        warpOptions=['INIT_DEST=-9999'],
+        warpOptions=[f'INIT_DEST={nodata_value}'],
         resampleAlg=gdal.GRA_NearestNeighbour
     )
     ds = gdal.Open(temp_overlap_albers, gdal.GA_Update)
     for band_index in range(1, ds.RasterCount + 1):
         band = ds.GetRasterBand(band_index)
-        array = band.ReadAsArray()
-        array = replace_ocean_values(array, band_index, nodata_value)
-        band.WriteArray(array)
+        arr = band.ReadAsArray()
+
+        # Replace rogue -9999 values and enforce correct NoData value
+        arr[(arr == -9999) | (arr == band.GetNoDataValue())] = nodata_value
+        band.WriteArray(arr)
+        band.SetNoDataValue(nodata_value)
+
+    ds.FlushCache()
     ds = None
 
     # Determine UTM Zone After 350% Expansion
@@ -192,9 +197,8 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
     center_lon, center_lat = (min_lon + max_lon) / 2, (min_lat + max_lat) / 2
     print(f"center_lon, center_lat : {center_lon, center_lat}")
     epsg_utm = determine_utm_zone(center_lon, center_lat)
-
     print("Determined UTM Zone: " + str(epsg_utm))
-    
+
     # Reproject 350% Overlapped Tile to UTM
     temp_utm_350 = os.path.join(temp_albers_dir, f"utm_350_tile_{tile_index}_epsg{epsg_utm}.tif")
     gdal.Warp(
@@ -202,32 +206,32 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         temp_350_albers,
         dstSRS=f"EPSG:{epsg_utm}",
         dstNodata=nodata_value,
-        warpOptions=['INIT_DEST=NO_DATA'],
+        warpOptions=[f'INIT_DEST={nodata_value}'],
         resampleAlg=gdal.GRA_NearestNeighbour
     )
 
-    # Reproject given percentage overlapped AOI Tile to UTM and force 30m resolution
+    # Reproject given percentage overlapped AOI Tile to UTM
     temp_utm_overlap_path = os.path.join(utm_overlap_dir, f"temp_utm_overlap_aoi_{tile_index}_epsg{epsg_utm}.tif")
     gdal.Warp(
         temp_utm_overlap_path,
         temp_overlap_albers,
         dstSRS=f"EPSG:{epsg_utm}",
         dstNodata=nodata_value,
-        warpOptions=['INIT_DEST=NO_DATA'],
+        warpOptions=[f'INIT_DEST={nodata_value}'],
         resampleAlg=gdal.GRA_NearestNeighbour
     )
     utm_overlap_path = os.path.join(utm_overlap_dir, f"utm_overlap_aoi_{tile_index}_epsg{epsg_utm}.tif")
     gdal.Warp(
-        utm_overlap_path,
-        temp_utm_overlap_path,
-        xRes=30,
-        yRes=30,
-        dstSRS=f"EPSG:{epsg_utm}",
-        dstNodata=nodata_value,
-        resampleAlg=gdal.GRA_NearestNeighbour
+       utm_overlap_path,
+       temp_utm_overlap_path,
+       xRes=30,
+       yRes=30,
+       dstSRS=f"EPSG:{epsg_utm}",
+       dstNodata=nodata_value,
+       resampleAlg=gdal.GRA_NearestNeighbour
     )
     os.remove(temp_utm_overlap_path)
-    
+
     # Compute Final Square and not tilted dem in UTM
     utm_overlap_ds = gdal.Open(utm_overlap_path)
     transform_overlap = utm_overlap_ds.GetGeoTransform()
@@ -253,10 +257,12 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         outputBounds=final_bounds,
         dstSRS=f"EPSG:{epsg_utm}",
         dstNodata=nodata_value,
-        warpOptions=['INIT_DEST=NO_DATA'],
+        warpOptions=[f'INIT_DEST={nodata_value}'],
         resampleAlg=gdal.GRA_NearestNeighbour
     )
+
     final_resampled_utm_path = os.path.join(base_output_dir, "dem0.tif")
+
     gdal.Warp(
         final_resampled_utm_path,
         final_utm_path,
@@ -264,6 +270,7 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         yRes=30,
         dstSRS=f"EPSG:{epsg_utm}",
         dstNodata=nodata_value,
+        targetAlignedPixels=True,
         resampleAlg=gdal.GRA_NearestNeighbour
     )
 
@@ -286,6 +293,7 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
     pixel_size = transform[1]
     tile_size_px = int((tile_size_km * 1000) / pixel_size)
 
+    # Compute total number of tiles in x and y directions
     x_size, y_size = dataset.RasterXSize, dataset.RasterYSize
     nodata_value = get_nodata_value(input_raster)
 
@@ -318,15 +326,11 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
 
             contains_valid_data = False
             for band_index in range(1, tile_ds.RasterCount + 1):
-                band = tile_ds.GetRasterBand(band_index)
-                data = band.ReadAsArray()
-
-                if data is not None and np.any(data != -9999):
-                    contains_valid_data = True
-                    data = replace_ocean_values(data, band_index, nodata_value)
-                    band.WriteArray(data)
-
-            tile_ds = None
+               band = tile_ds.GetRasterBand(band_index)
+               data = band.ReadAsArray()
+               data[data == -9999] = nodata_value
+               if np.any(data != nodata_value):
+                  contains_valid_data = True
 
             if not contains_valid_data:
                 os.remove(output_tile)
@@ -338,12 +342,9 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
             max_y = transform[3] - y * abs(transform[5])
             min_y = max_y - tile_size_px * abs(transform[5])
             tile_bounds = (min_x, min_y, max_x, max_y)
-
             tile_data_list.append((input_raster, tile_bounds, output_dir, tile_count, overlap_percentage))
-            print(f"[INFO] Tile {tile_count} completed.")
+            print(f"[INFO] Tile {tile_count} queued.")
             tile_count += 1
-
-            # Process tiles every 8 iterations
             if len(tile_data_list) == 8 or tile_count >= max_tiles:
                 with mp.Pool(processes=num_workers) as pool:
                     pool.starmap(overlap_and_reproject, tile_data_list)
@@ -352,6 +353,6 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
     print(f"[INFO] Total tiles generated: {tile_count}/{estimated_total_tiles}")
 
 if __name__ == "__main__":
-    input_raster_path =  "/mnt/c/Users/dgh00/OneDrive/Desktop/CONUS2022/2023_lcp.tif"
-    output_directory = "/mnt/d/tiles_washington"
-    create_tiles(input_raster_path, output_directory, 64, 25, 350, num_workers=8)
+    input_raster_path =  "/volumes/vol1/2023_lcp.tif"
+    output_directory = "/volumes/vol1/CONUS"
+    create_tiles(input_raster_path, output_directory, 64, 45, num_workers=8)
