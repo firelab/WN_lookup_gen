@@ -1,7 +1,7 @@
 """
  * Project:  WN_Lookup_Gen
  * Purpose:  Python script for converting tiles(Windninja asc and prj files) from UTM to conus albers
- * Author: Gunjan Dayani <gunjandayani015@gmail.com>
+ * Author: Gunjan Dayani <gunjan.dayani@usda.gov>
 
  ******************************************************************************
  *
@@ -31,10 +31,48 @@ import subprocess
 import multiprocessing
 from osgeo import gdal, ogr, osr
 import numpy as np
+import argparse
 
 gdal.UseExceptions()
 
 tiles = set(range(2500))
+
+def get_raster_bounds(raster_path):
+    """Get bounding box (minx, miny, maxx, maxy) from a raster."""
+    ds = gdal.Open(raster_path)
+    gt = ds.GetGeoTransform()
+    x_min = gt[0]
+    x_max = x_min + ds.RasterXSize * gt[1]
+    y_max = gt[3]
+    y_min = y_max + ds.RasterYSize * gt[5]
+    ds = None
+    return (x_min, y_min, x_max, y_max)
+
+def rasters_overlap(raster1_path, raster2_path):
+    """Check if two rasters overlap spatially."""
+    ds1 = gdal.Open(raster1_path)
+    ds2 = gdal.Open(raster2_path)
+    if ds1 is None or ds2 is None:
+        return False
+
+    gt1 = ds1.GetGeoTransform()
+    gt2 = ds2.GetGeoTransform()
+
+    x1_min = gt1[0]
+    x1_max = x1_min + ds1.RasterXSize * gt1[1]
+    y1_max = gt1[3]
+    y1_min = y1_max + ds1.RasterYSize * gt1[5]
+
+    x2_min = gt2[0]
+    x2_max = x2_min + ds2.RasterXSize * gt2[1]
+    y2_max = gt2[3]
+    y2_min = y2_max + ds2.RasterYSize * gt2[5]
+
+    ds1 = None
+    ds2 = None
+
+    return not (x1_max < x2_min or x1_min > x2_max or y1_min > y2_max or y1_max < y2_min)
+
 
 def remove_temp_files(*file_patterns):
     for file_pattern in file_patterns:
@@ -50,6 +88,8 @@ def convert_speed_dir_to_uv(speed_array, direction_array):
     """
     if speed_array.shape != direction_array.shape:
         raise ValueError("Speed and Direction arrays must have the same shape.")
+    
+    speed_array = speed_array / 2.23693629205
 
     direction_radians = np.radians(270.0 - direction_array)
 
@@ -132,58 +172,69 @@ def crop_to_original_tile(final_raster):
     width, height = ds.RasterXSize, ds.RasterYSize
     center_x = gt[0] + (width / 2) * pixel_size_x
     center_y = gt[3] - (height / 2) * pixel_size_y
-    half_extent = 40000
+    half_extent = 45000
     min_x = center_x - half_extent
     max_x = center_x + half_extent
     min_y = center_y - half_extent
     max_y = center_y + half_extent
     ds = None
 
-    print(f"[INFO] Cropping raster to 80km x 80km centered at ({center_x}, {center_y})")
+    print(f"[INFO] Cropping raster to 90km x 90km centered at ({center_x}, {center_y})")
     print(f"[INFO] New bounding box: ({min_x}, {min_y}, {max_x}, {max_y})")
 
     gdal.Warp(final_raster, final_raster, outputBounds=(min_x, min_y, max_x, max_y), dstNodata=-9999)
-    print(f"[INFO] Cropped {final_raster} to 80km x 80km centered region.")
+    print(f"[INFO] Cropped {final_raster} to 90km x 90km centered region.")
 
-def generate_aoi_mask(aoi_raster, output_shapefile):
-    print(f"[INFO] Generating AOI mask from {aoi_raster}...")
-    command = f"gdal_polygonize.py '{aoi_raster}' -f 'ESRI Shapefile' '{output_shapefile}'"
-    subprocess.run(command, shell=True, check=True)
-    print(f"[INFO] AOI mask saved as {output_shapefile}")
-
-def clip_and_resample_and_reproject(input_raster, output_raster, aoi_mask, aoi_raster, reprojected_raster, final_resampled_raster):
-    """Clip and resample input raster to match AOI resolution and bounding box, then reproject to CONUS Albers (EPSG:5070)"""
-    os.makedirs(os.path.dirname(output_raster), exist_ok=True)
+def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, reprojected_raster, final_resampled_raster):
+    """
+    1. Clip input_raster using aoi_raster bounds
+    2. Reproject clipped raster to EPSG:5070
+    3. Crop to 90km × 90km centered box
+    4. Resample to 120m resolution
+    """
+    os.makedirs(os.path.dirname(clipped_raster), exist_ok=True)
     os.makedirs(os.path.dirname(reprojected_raster), exist_ok=True)
     os.makedirs(os.path.dirname(final_resampled_raster), exist_ok=True)
+
     print(f"[INFO] Clipping and resampling {input_raster} to match AOI {aoi_raster}...")
-    options = gdal.WarpOptions(
-        cutlineDSName=aoi_mask,
-        cropToCutline=True,
+
+    # Step 1: Check overlap
+    if not rasters_overlap(input_raster, aoi_raster):
+        print(f"[WARNING] Input raster {input_raster} does not overlap AOI {aoi_raster}. Skipping.")
+        return
+
+    # Step 2: Get AOI bounds
+    minx, miny, maxx, maxy = get_raster_bounds(aoi_raster)
+
+    # Step 3: Clip to AOI bounds
+    options_clip = gdal.WarpOptions(
+        outputBounds=(minx, miny, maxx, maxy),
         dstNodata=-9999
     )
-    gdal.Warp(output_raster, input_raster, options=options)
-    print(f"[INFO] Clipped and resampled raster saved: {output_raster}")
+    gdal.Warp(clipped_raster, input_raster, options=options_clip)
+    print(f"[INFO] Clipped raster saved: {clipped_raster}")
 
-    print(f"[INFO] Reprojecting {output_raster} to CONUS Albers (EPSG:5070)...")
+    # Step 4: Reproject to EPSG:5070
     options_reproj = gdal.WarpOptions(
         dstSRS="EPSG:5070",
         resampleAlg=gdal.GRA_Bilinear,
         dstNodata=-9999
     )
-    gdal.Warp(reprojected_raster, output_raster, options=options_reproj)
+    gdal.Warp(reprojected_raster, clipped_raster, options=options_reproj)
     print(f"[INFO] Reprojected raster saved: {reprojected_raster}")
 
-    print(f"[INFO] Cropping {reprojected_raster} to 80km * 80km and get rid of NoData on each side...")
+    # Step 5: Crop to 90km x 90km centered box
+    print(f"[INFO] Cropping {reprojected_raster} to 90km × 90km box...")
     crop_to_original_tile(reprojected_raster)
-    print(f"[INFO] Forcing resolution to 120m x 120m for {reprojected_raster}...")
-    options_force_res = gdal.WarpOptions(
+
+    # Step 6: Final resample to 120m
+    options_final = gdal.WarpOptions(
         xRes=120,
         yRes=120,
         resampleAlg=gdal.GRA_Bilinear,
         dstNodata=-9999
     )
-    gdal.Warp(final_resampled_raster, reprojected_raster, options=options_force_res)
+    gdal.Warp(final_resampled_raster, reprojected_raster, options=options_final)
     print(f"[INFO] Final raster with 120m resolution saved: {final_resampled_raster}")
 
 def process_tile(folder, base_dir, aoi_tiles_dir, output_dir, directions):
@@ -228,22 +279,14 @@ def process_tile(folder, base_dir, aoi_tiles_dir, output_dir, directions):
             reprojected_tif = os.path.join(tile_wind_output_dir, f"{folder}_reproj.tif")
             final_resampled_raster = os.path.join(tile_wind_output_dir, f"{folder}.tif")
 
-            aoi_mask_shp = os.path.join("/tmp", f"aoi_mask_{folder}_{os.getpid()}.shp")
-            remove_temp_files(aoi_mask_shp)
-
-            # Generate a mask from the AOI tile
-            generate_aoi_mask(matching_aoi_tile, aoi_mask_shp)
-
             clip_and_resample_and_reproject(
                 generated_tif,
-                clipped_tif,
-                aoi_mask_shp,
                 matching_aoi_tile,
+                clipped_tif,
                 reprojected_tif,
                 final_resampled_raster
             )
 
-            remove_temp_files(aoi_mask_shp)
             remove_temp_files(clipped_tif)
             remove_temp_files(reprojected_tif)
             remove_temp_files(tif_output)
@@ -252,18 +295,41 @@ def process_tiles(base_dir, aoi_tiles_dir, output_dir, directions):
     """Processes tiles in parallel using multiprocessing"""
     os.makedirs(output_dir, exist_ok=True)
     tile_folders = [f for f in os.listdir(base_dir) if f.isdigit() and int(f) in tiles]
-    num_workers = min(16, os.cpu_count())
+    num_workers = 8
     with multiprocessing.Pool(processes=num_workers) as pool:
         pool.starmap(process_tile, [(folder, base_dir, aoi_tiles_dir, output_dir, directions) for folder in tile_folders])
     print("[INFO] Processing complete.")
 
-if __name__ == "__main__":
-    base_dir = "/mnt/d/CONUS"
-    aoi_tiles_dir = "/mnt/d/tiles/utm_aoi"
-    output_dir = "/mnt/d/processed_CONUS"
+def main():
+    """
+    Process WindNinja tiles based on input base directory, AOI (Area of Interest) tiles directory,
+    and output directory for processed results.
+    
+    Arguments:
+    - base_dir: Directory containing WindNinja directional outputs.
+    - aoi_tiles_dir: Directory containing AOI tiles to clip/match WindNinja tiles.
+    - output_dir: Directory where processed tiles will be saved.
+    - directions: List of wind directions to process.
+    """
+    parser = argparse.ArgumentParser(description="Process WindNinja tiles for multiple directions.")
+    parser.add_argument("--base_dir", required=True, help="Path to base WindNinja output directory")
+    parser.add_argument("--aoi_tiles_dir", required=True, help="Path to directory containing AOI tiles")
+    parser.add_argument("--output_dir", required=True, help="Path to output directory for processed files")
+    args = parser.parse_args()
+
+    base_dir = args.base_dir
+    aoi_tiles_dir = args.aoi_tiles_dir
+    output_dir = args.output_dir
+
+    # List of wind directions (fixed as per WindNinja output)
     directions = [
         "0-0-deg", "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
         "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",
         "225-0-deg", "247-5-deg", "270-0-deg", "292-5-deg", "315-0-deg", "337-5-deg"
     ]
+
+    # Call your processing function (assumed to be defined elsewhere)
     process_tiles(base_dir, aoi_tiles_dir, output_dir, directions)
+
+if __name__ == "__main__":
+    main()

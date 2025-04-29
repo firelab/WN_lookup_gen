@@ -1,7 +1,7 @@
 """
  * Project:  WN_Lookup_Gen
  * Purpose:  Python script for weighted stitching of tiles
- * Author: Gunjan Dayani <gunjandayani015@gmail.com>
+ * Author: Gunjan Dayani <gunjan.dayani@usda.gov>
 
  ******************************************************************************
  *
@@ -45,6 +45,7 @@ from osgeo import gdal, osr
 import numpy as np
 from multiprocessing import Pool, cpu_count
 import csv
+import argparse
 
 def find_overlapping_tiles(tiles_dir, mosaic_metadata):
     """Find overlapping tiles directly from .tif files using parent folder as tile_id."""
@@ -159,10 +160,9 @@ def test_find_overlapping_tiles(input_raster, tiles_dir, output_raster):
     print(f"Overlap count raster saved: {output_raster}")
 
 def generate_weight_matrix():
-    rows, cols = 667, 667
+    rows, cols = 750, 750    
     weight_matrix = np.zeros((rows, cols), dtype=np.float32)
-
-    ignore_edge_width_pixels = 30
+    ignore_edge_width_pixels = 50
     fully_weighted_radius = 240
 
     center_x, center_y = rows // 2, cols // 2
@@ -360,6 +360,9 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     weight_band[valid_mask] = sum_weights_band[valid_mask]
     weight_band[~valid_mask] = -9999
 
+    # velocity_band = gaussian_filter(velocity_band, sigma=1)
+    # direction_band = gaussian_filter(direction_band, sigma=1)
+
     # Write to raster bands
     ds.GetRasterBand(1).WriteArray(velocity_band)
     ds.GetRasterBand(1).SetNoDataValue(-9999)
@@ -377,17 +380,31 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     print("[INFO] Mosaic processing completed successfully!")
 
 def main():
-    # test_wind_conversions()
-    base_raster = "/mnt/c/Users/dgh00/OneDrive/Desktop/mossaics/ref_raster_120m.tif"
-    output_directory = "/mnt/c/Users/dgh00/OneDrive/Desktop/test_mossaics"
-    tiles_base_directory = "/mnt/d/processed_CONUS"
+    """
+    Create mosaics for each wind direction by overlaying processed tiles onto a reference raster.
 
-    # List of wind directions
+    Arguments:
+    - base_raster: Path to the reference raster (defines output grid, projection, resolution).
+    - output_directory: Directory where final mosaics will be saved.
+    - tiles_base_directory: Directory containing subdirectories for each wind direction's processed tiles.
+    """
+    parser = argparse.ArgumentParser(description="Create WindNinja CONUS mosaics from processed tiles.")
+    parser.add_argument("--base_raster", required=True, help="Path to the base reference raster (e.g., ref_raster_120m.tif)")
+    parser.add_argument("--output_directory", required=True, help="Directory to save output mosaics")
+    parser.add_argument("--tiles_base_directory", required=True, help="Directory containing tiles organized by wind direction")
+    args = parser.parse_args()
+
+    base_raster = args.base_raster
+    output_directory = args.output_directory
+    tiles_base_directory = args.tiles_base_directory
+
+    # Hardcoded list of wind directions (always same)
     wind_directions = [
         "0-0-deg", "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
         "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",
         "225-0-deg", "247-5-deg", "270-0-deg", "292-5-deg", "315-0-deg", "337-5-deg"
     ]
+
     # Open base raster to extract metadata
     src_ds = gdal.Open(base_raster)
     if src_ds is None:
@@ -406,21 +423,23 @@ def main():
 
     print(f"Mosaic Grid Info: {mosaic_metadata}")
 
+    os.makedirs(output_directory, exist_ok=True)
+
     for direction in wind_directions:
         output_raster = os.path.join(output_directory, f"{direction}.tif")
-        tiles_directory = os.path.join(tiles_base_directory, direction)  # Assign correct tiles directory
-        
-        # Ensure the tiles directory exists before processing
+        tiles_directory = os.path.join(tiles_base_directory, direction)
+
+        # Ensure the tiles directory exists
         if not os.path.exists(tiles_directory):
             print(f"[WARNING] Tiles directory not found: {tiles_directory}, skipping {direction}.")
             continue
 
         print(f"[INFO] Processing direction: {direction}")
-        
+
         # Copy base raster for processing
         shutil.copy(base_raster, output_raster)
 
-        # Generate CSV file names based on the wind direction
+        # Prepare CSV debug/summary output paths
         debug_csv = os.path.join(output_directory, f"debug_tiles_{direction}.csv")
         summary_csv = os.path.join(output_directory, f"summary_pixels_{direction}.csv")
 

@@ -1,7 +1,7 @@
 """
  * Project:  WN_Lookup_Gen
  * Purpose:  Python script for preparing tiles from conus landscape and reproject to UTM
- * Author: Gunjan Dayani <gunjandayani015@gmail.com>
+ * Author: Gunjan Dayani <gunjan.dayani@usda.gov>
 
  ******************************************************************************
  *
@@ -31,6 +31,7 @@ import shutil
 import numpy as np
 import multiprocessing as mp
 from osgeo import gdal, osr, ogr
+import argparse
 
 def get_nodata_value(raster_path):
     """Extract NoData value from the first band of a raster file."""
@@ -352,7 +353,33 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
 
     print(f"[INFO] Total tiles generated: {tile_count}/{estimated_total_tiles}")
 
+def main():
+    """
+    Create tiles from a large raster based on specified tile size and overlap.
+
+    Arguments:
+    - input_raster_path: Path to the large input raster file (e.g., CONUS LCP).
+    - output_directory: Directory where the generated tiles will be saved.
+    - tile_size: Size of each tile (in number of pixels).
+    - overlap: Overlap between adjacent tiles (in number of pixels).
+    - num_workers: Number of parallel workers for faster processing.
+    """
+    parser = argparse.ArgumentParser(description="Tile a large raster into smaller chunks with overlap.")
+    parser.add_argument("--input_raster_path", required=True, help="Path to the input raster file")
+    parser.add_argument("--output_directory", required=True, help="Directory to save output tiles")
+    parser.add_argument("--tile_size", type=int, default=64, help="Size of each tile in pixels (default: 64)")
+    parser.add_argument("--overlap", type=int, default=45, help="Overlap between tiles in pixels (default: 45)")
+    parser.add_argument("--num_workers", type=int, default=8, help="Number of parallel workers (default: 8)")
+    args = parser.parse_args()
+
+    input_raster_path = args.input_raster_path
+    output_directory = args.output_directory
+    tile_size = args.tile_size
+    overlap = args.overlap
+    num_workers = args.num_workers
+
+    # Call your tiling function (assumed to be defined elsewhere)
+    create_tiles(input_raster_path, output_directory, tile_size, overlap, num_workers=num_workers)
+
 if __name__ == "__main__":
-    input_raster_path =  "/volumes/vol1/2023_lcp.tif"
-    output_directory = "/volumes/vol1/CONUS"
-    create_tiles(input_raster_path, output_directory, 64, 45, num_workers=8)
+    main()
