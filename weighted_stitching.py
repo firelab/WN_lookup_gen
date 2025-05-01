@@ -162,12 +162,10 @@ def test_find_overlapping_tiles(input_raster, tiles_dir, output_raster):
 def generate_weight_matrix():
     rows, cols = 750, 750    
     weight_matrix = np.zeros((rows, cols), dtype=np.float32)
-    ignore_edge_width_pixels = 50
+    ignore_edge_width_pixels = 30
     fully_weighted_radius = 240
 
     center_x, center_y = rows // 2, cols // 2
-
-    # λ = 0.02
 
     for i in range(rows):
         for j in range(cols):
@@ -180,7 +178,6 @@ def generate_weight_matrix():
                 weight_matrix[i, j] = 1.0
             else:
                 weight_matrix[i, j] = (center_x - max_dist - ignore_edge_width_pixels) / (center_x - fully_weighted_radius)
-                # weight_matrix[i, j] = np.exp(-λ * (max_dist - fully_weighted_radius))
 
     return weight_matrix
 
@@ -231,6 +228,9 @@ def process_single_tile(args):
 
     tile_u = ds_tile.GetRasterBand(1).ReadAsArray()
     tile_v = ds_tile.GetRasterBand(2).ReadAsArray()
+
+    tile_u = tile_u.astype(np.float32)
+    tile_v = tile_v.astype(np.float32)
 
     tile_x_center = (tile_x_min + tile_x_max) / 2
     tile_y_center = (tile_y_min + tile_y_max) / 2
@@ -359,9 +359,6 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     direction_band[~valid_mask] = -9999
     weight_band[valid_mask] = sum_weights_band[valid_mask]
     weight_band[~valid_mask] = -9999
-
-    # velocity_band = gaussian_filter(velocity_band, sigma=1)
-    # direction_band = gaussian_filter(direction_band, sigma=1)
 
     # Write to raster bands
     ds.GetRasterBand(1).WriteArray(velocity_band)

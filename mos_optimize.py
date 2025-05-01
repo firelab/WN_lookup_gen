@@ -31,6 +31,8 @@ import rasterio
 from rasterio.warp import reproject, Resampling
 from glob import glob
 import argparse
+import fiona
+from rasterio.features import geometry_mask
 
 def optimize_conus_mosaics(input_dir, mask_path, output_dir):
     """
@@ -42,12 +44,8 @@ def optimize_conus_mosaics(input_dir, mask_path, output_dir):
     - output_dir: Directory where optimized rasters will be saved.
     """
     os.makedirs(output_dir, exist_ok=True)
-
-    # Load CONUS mask
-    with rasterio.open(mask_path) as mask_src:
-        mask_data = mask_src.read(1)
-        mask_transform = mask_src.transform
-        mask_crs = mask_src.crs
+    with fiona.open(mask_path, "r") as shapefile:
+        conus_shapes = [feature["geometry"] for feature in shapefile]
 
     # Loop through input mosaics
     for tif_path in glob(os.path.join(input_dir, "*.tif")):
@@ -57,35 +55,27 @@ def optimize_conus_mosaics(input_dir, mask_path, output_dir):
             band1 = src.read(1)
             band2 = src.read(2)
 
-            # Reproject the mask to match input raster
-            aligned_mask = np.zeros((src.height, src.width), dtype=np.uint8)
-            reproject(
-                source=mask_data,
-                destination=aligned_mask,
-                src_transform=mask_transform,
-                src_crs=mask_crs,
-                dst_transform=src.transform,
-                dst_crs=src.crs,
-                resampling=Resampling.nearest
-            )
+            # Create geometry mask for current raster
+            aligned_mask = geometry_mask(
+                geometries=conus_shapes,
+                transform=src.transform,
+                invert=True,
+                out_shape=(src.height, src.width)
+            ).astype(np.uint8)
 
             # Mask out values outside CONUS
             band1[aligned_mask != 1] = -9999
             band2[aligned_mask != 1] = -9999
 
-            # Replace any internal -9999s inside CONUS with 0
-            band1[(band1 == -9999) & (aligned_mask == 1)] = 0
-            band2[(band2 == -9999) & (aligned_mask == 1)] = 0
-
             # Cast to int16
-            band1 = band1.astype(np.int16)
-            band2 = band2.astype(np.int16)
+            band1 = band1.astype(np.float32)
+            band2 = band2.astype(np.float32)
 
             # Update profile
             profile = src.profile.copy()
             profile.update({
                 "count": 2,
-                "dtype": "int16",
+                "dtype": "float32",
                 "compress": "deflate",
                 "tiled": True,
                 "blockxsize": 256,

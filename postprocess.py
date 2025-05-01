@@ -73,7 +73,6 @@ def rasters_overlap(raster1_path, raster2_path):
 
     return not (x1_max < x2_min or x1_min > x2_max or y1_min > y2_max or y1_max < y2_min)
 
-
 def remove_temp_files(*file_patterns):
     for file_pattern in file_patterns:
         if os.path.exists(file_pattern):
@@ -89,12 +88,11 @@ def convert_speed_dir_to_uv(speed_array, direction_array):
     if speed_array.shape != direction_array.shape:
         raise ValueError("Speed and Direction arrays must have the same shape.")
     
-    speed_array = speed_array / 2.23693629205
+    direction_to = (direction_array + 180.0) % 360.0
+    direction_radians = np.radians(direction_to)
 
-    direction_radians = np.radians(270.0 - direction_array)
-
-    u_array = -speed_array * np.cos(direction_radians)
-    v_array = -speed_array * np.sin(direction_radians)
+    u_array = speed_array * np.cos(direction_radians)
+    v_array = speed_array * np.sin(direction_radians)
 
     return u_array, v_array
 
