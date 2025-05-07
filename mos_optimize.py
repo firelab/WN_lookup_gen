@@ -67,7 +67,6 @@ def optimize_conus_mosaics(input_dir, mask_path, output_dir):
             band1[aligned_mask != 1] = -9999
             band2[aligned_mask != 1] = -9999
 
-            # Cast to int16
             band1 = band1.astype(np.float32)
             band2 = band2.astype(np.float32)
 

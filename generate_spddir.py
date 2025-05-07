@@ -35,7 +35,36 @@ import argparse
 
 gdal.UseExceptions()
 
-tiles = set(range(2500))
+tiles = set(range(25000))
+
+import numpy as np
+
+def wind_sd_to_uv(speed_array, direction_array):
+    # Clean up 360 to 0 (WindNinja standard)
+    direction_array = np.where(direction_array == 360.0, 0.0, direction_array)
+
+    # Precompute radians
+    dir_rad = np.radians(direction_array)
+
+    # Initialize output arrays
+    u_array = -speed_array * np.sin(dir_rad)
+    v_array = -speed_array * np.cos(dir_rad)
+
+    # Handle exact axis cases
+    u_array = np.where((direction_array == 0.0) | (direction_array == 180.0), 0.0, u_array)
+    v_array = np.where((direction_array == 90.0) | (direction_array == 270.0), 0.0, v_array)
+
+    return u_array.astype(np.float32), v_array.astype(np.float32)
+
+def wind_uv_to_sd(u_array, v_array):
+    speed_array = np.sqrt(np.square(u_array) + np.square(v_array))
+
+    inter_dir = np.degrees(np.arctan2(v_array, u_array)) - 180.0
+    inter_dir = np.where(inter_dir < 0.0, inter_dir + 360.0, inter_dir)
+
+    direction_array = (450.0 - inter_dir) % 360.0  # xy_to_n
+
+    return speed_array.astype(np.float32), direction_array.astype(np.float32)
 
 def get_raster_bounds(raster_path):
     """Get bounding box (minx, miny, maxx, maxy) from a raster."""
@@ -79,21 +108,7 @@ def remove_temp_files(*file_patterns):
             os.remove(file_pattern)
             print(f"[INFO] Removed temporary file: {file_pattern}")
 
-def wind_sd_to_uv(speed_array, direction_array):
-    direction_array = np.where(direction_array == 360.0, 0.0, direction_array)
-    dir_rad = np.radians(direction_array)
-    u_array = -speed_array * np.sin(dir_rad)
-    v_array = -speed_array * np.cos(dir_rad)
-    u_array = np.where((direction_array == 0.0) | (direction_array == 180.0), 0.0, u_array)
-    v_array = np.where((direction_array == 90.0) | (direction_array == 270.0), 0.0, v_array)
-    return u_array.astype(np.float32), v_array.astype(np.float32)
-
 def make_tif(vel_asc, ang_asc, prj_file, output_tif):
-    """
-    Converts velocity and direction ASC files into a two-band GeoTIFF.
-    - Band 1: U wind component
-    - Band 2: V wind component
-    """
     if not (os.path.exists(vel_asc) and os.path.exists(ang_asc) and os.path.exists(prj_file)):
         print(f"[WARNING] Missing required files: {vel_asc}, {ang_asc}, {prj_file}. Skipping.")
         return None
@@ -116,7 +131,6 @@ def make_tif(vel_asc, ang_asc, prj_file, output_tif):
     # Load ASC files and convert speed/direction to U/V components
     speed_array = np.loadtxt(vel_asc, skiprows=6)
     direction_array = np.loadtxt(ang_asc, skiprows=6)
-    u_array, v_array = wind_sd_to_uv(speed_array, direction_array)
 
     os.makedirs(os.path.dirname(output_tif), exist_ok=True)
 
@@ -139,16 +153,16 @@ def make_tif(vel_asc, ang_asc, prj_file, output_tif):
     out_ds.SetProjection(projection_wkt)
 
     band1 = out_ds.GetRasterBand(1)
-    band1.WriteArray(u_array)
+    band1.WriteArray(speed_array)
     band1.SetNoDataValue(-9999)
 
     band2 = out_ds.GetRasterBand(2)
-    band2.WriteArray(v_array)
+    band2.WriteArray(direction_array)
     band2.SetNoDataValue(-9999)
 
     band1, band2, out_ds = None, None, None  # Close dataset
 
-    print(f"[INFO] Created TIF: {output_tif} (U in Band 1, V in Band 2)")
+    print(f"[INFO] Created TIF: {output_tif} (spd in Band 1, dir in Band 2)")
 
     return output_tif
 
@@ -175,13 +189,11 @@ def crop_to_original_tile(final_raster):
     gdal.Warp(final_raster, final_raster, outputBounds=(min_x, min_y, max_x, max_y), dstNodata=-9999)
     print(f"[INFO] Cropped {final_raster} to 90km x 90km centered region.")
 
+import os
+import numpy as np
+from osgeo import gdal
+
 def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, reprojected_raster, final_resampled_raster):
-    """
-    1. Clip input_raster using aoi_raster bounds
-    2. Reproject clipped raster to EPSG:5070
-    3. Crop to 90km × 90km centered box
-    4. Resample to 120m resolution
-    """
     os.makedirs(os.path.dirname(clipped_raster), exist_ok=True)
     os.makedirs(os.path.dirname(reprojected_raster), exist_ok=True)
     os.makedirs(os.path.dirname(final_resampled_raster), exist_ok=True)
@@ -193,6 +205,25 @@ def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, re
         print(f"[WARNING] Input raster {input_raster} does not overlap AOI {aoi_raster}. Skipping.")
         return
 
+    # Step 1.5: Convert speed/dir → u/v and write to temp raster
+    uv_tmp = input_raster.replace('.tif', '_uv_tmp.tif')
+    ds = gdal.Open(input_raster)
+    spd = ds.GetRasterBand(1).ReadAsArray()
+    dir = ds.GetRasterBand(2).ReadAsArray()
+    u, v = wind_sd_to_uv(spd, dir)
+
+    driver = gdal.GetDriverByName('GTiff')
+    uv_ds = driver.Create(uv_tmp, ds.RasterXSize, ds.RasterYSize, 2, gdal.GDT_Float32)
+    uv_ds.SetGeoTransform(ds.GetGeoTransform())
+    uv_ds.SetProjection(ds.GetProjection())
+    uv_ds.GetRasterBand(1).WriteArray(u)
+    uv_ds.GetRasterBand(1).SetNoDataValue(-9999)
+    uv_ds.GetRasterBand(2).WriteArray(v)
+    uv_ds.GetRasterBand(2).SetNoDataValue(-9999)
+    uv_ds.FlushCache()
+    uv_ds = None
+    ds = None
+
     # Step 2: Get AOI bounds
     minx, miny, maxx, maxy = get_raster_bounds(aoi_raster)
 
@@ -201,7 +232,7 @@ def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, re
         outputBounds=(minx, miny, maxx, maxy),
         dstNodata=-9999
     )
-    gdal.Warp(clipped_raster, input_raster, options=options_clip)
+    gdal.Warp(clipped_raster, uv_tmp, options=options_clip)
     print(f"[INFO] Clipped raster saved: {clipped_raster}")
 
     # Step 4: Reproject to EPSG:5070
@@ -226,6 +257,22 @@ def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, re
     )
     gdal.Warp(final_resampled_raster, reprojected_raster, options=options_final)
     print(f"[INFO] Final raster with 120m resolution saved: {final_resampled_raster}")
+
+    # Step 6.5: Convert u/v → speed/direction and overwrite final raster
+    ds = gdal.Open(final_resampled_raster, gdal.GA_Update)
+    u = ds.GetRasterBand(1).ReadAsArray()
+    v = ds.GetRasterBand(2).ReadAsArray()
+    spd, dir = wind_uv_to_sd(u, v)
+    ds.GetRasterBand(1).WriteArray(spd.astype(np.float32))
+    ds.GetRasterBand(2).WriteArray(dir.astype(np.float32))
+    ds.FlushCache()
+    ds = None
+
+    # Step 7: Cleanup temp UV raster
+    if os.path.exists(uv_tmp):
+        os.remove(uv_tmp)
+
+    print(f"[INFO] Final speed/direction raster saved: {final_resampled_raster}")
 
 def process_tile(folder, base_dir, aoi_tiles_dir, output_dir, directions):
     """Processes a single tile - Clip, resample, and reproject."""
@@ -312,11 +359,7 @@ def main():
     output_dir = args.output_dir
 
     # List of wind directions (fixed as per WindNinja output)
-    directions = [
-        "0-0-deg", "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
-        "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",
-        "225-0-deg", "247-5-deg", "270-0-deg", "292-5-deg", "315-0-deg", "337-5-deg"
-    ]
+    directions = ["45-0-deg"]
 
     # Call your processing function (assumed to be defined elsewhere)
     process_tiles(base_dir, aoi_tiles_dir, output_dir, directions)

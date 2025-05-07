@@ -199,9 +199,11 @@ def convert_to_latlon(x, y, src_epsg=5070, dest_epsg=4326):
     
     return lon, lat
 
-def wind_uv_to_sd(u: np.ndarray, v: np.ndarray):
-    speed = np.sqrt(np.square(u) + np.square(v))
-    direction = (270.0 - np.degrees(np.arctan2(v, u))) % 360.0
+def wind_uv_to_sd(u, v):
+    speed = np.sqrt(u**2 + v**2)
+    inter_dir = np.degrees(np.arctan2(v, u)) - 180.0
+    inter_dir = np.where(inter_dir < 0, inter_dir + 360.0, inter_dir)
+    direction = (450.0 - inter_dir) % 360.0  # This is WindNinja's xy_to_n()
     return speed, direction
 
 def process_single_tile(args):
