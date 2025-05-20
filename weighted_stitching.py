@@ -145,7 +145,14 @@ def test_find_overlapping_tiles(input_raster, tiles_dir, output_raster):
     print(f"[DEBUG] Total cells affected in mosaic: {np.count_nonzero(count_array)}")
 
     driver = gdal.GetDriverByName("GTiff")
-    out_ds = driver.Create(output_raster, mosaic_metadata["ncols"], mosaic_metadata["nrows"], 1, gdal.GDT_UInt16, options=["COMPRESS=LZW"])
+    out_ds = driver.Create(
+        output_raster,
+        mosaic_metadata["ncols"],
+        mosaic_metadata["nrows"],
+        1,
+        gdal.GDT_UInt16,
+        options=["COMPRESS=LZW", "BIGTIFF=YES"]
+    )
     out_ds.SetGeoTransform(geo_transform)
     out_ds.SetProjection(projection)
 
@@ -160,7 +167,7 @@ def test_find_overlapping_tiles(input_raster, tiles_dir, output_raster):
     print(f"Overlap count raster saved: {output_raster}")
 
 def generate_weight_matrix():
-    rows, cols = 750, 750    
+    rows, cols = 750, 750
     weight_matrix = np.zeros((rows, cols), dtype=np.float32)
     ignore_edge_width_pixels = 30
     fully_weighted_radius = 240
@@ -435,8 +442,26 @@ def main():
 
         print(f"[INFO] Processing direction: {direction}")
 
-        # Copy base raster for processing
-        shutil.copy(base_raster, output_raster)
+        # Create BigTIFF raster from base metadata
+        driver = gdal.GetDriverByName("GTiff")
+        out_ds = driver.Create(
+            output_raster,
+            mosaic_metadata["ncols"],
+            mosaic_metadata["nrows"],
+            3,  # Velocity, Direction, weight bands
+            gdal.GDT_Float32,
+            options=["COMPRESS=LZW", "BIGTIFF=YES"]
+        )
+        out_ds.SetGeoTransform(geo_transform)
+        out_ds.SetProjection(projection)
+
+        # Fill with NoData initially
+        for b in range(1, 3):
+            band = out_ds.GetRasterBand(b)
+            band.Fill(-9999)
+            band.SetNoDataValue(-9999)
+
+        out_ds = None
 
         # Prepare CSV debug/summary output paths
         debug_csv = os.path.join(output_directory, f"debug_tiles_{direction}.csv")

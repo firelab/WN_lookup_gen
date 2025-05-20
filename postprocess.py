@@ -168,8 +168,6 @@ def crop_to_original_tile(final_raster):
     min_y = center_y - half_extent
     max_y = center_y + half_extent
     ds = None
-
-    print(f"[INFO] Cropping raster to 90km x 90km centered at ({center_x}, {center_y})")
     print(f"[INFO] New bounding box: ({min_x}, {min_y}, {max_x}, {max_y})")
 
     gdal.Warp(final_raster, final_raster, outputBounds=(min_x, min_y, max_x, max_y), dstNodata=-9999)

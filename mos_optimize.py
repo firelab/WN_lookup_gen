@@ -88,8 +88,6 @@ def optimize_conus_mosaics(input_dir, mask_path, output_dir):
                 dst.write(band1, 1)
                 dst.write(band2, 2)
 
-    print("All rasters masked to CONUS and cleaned (values outside set to 0).")
-
 def main():
     parser = argparse.ArgumentParser(description="Optimize CONUS mosaics by masking and compressing rasters.")
     parser.add_argument("--input_dir", required=True, help="Directory containing input mosaics (.tif files)")
