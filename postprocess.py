@@ -162,7 +162,7 @@ def crop_to_original_tile(final_raster):
     width, height = ds.RasterXSize, ds.RasterYSize
     center_x = gt[0] + (width / 2) * pixel_size_x
     center_y = gt[3] - (height / 2) * pixel_size_y
-    half_extent = 45000
+    half_extent = 64000
     min_x = center_x - half_extent
     max_x = center_x + half_extent
     min_y = center_y - half_extent
@@ -171,13 +171,13 @@ def crop_to_original_tile(final_raster):
     print(f"[INFO] New bounding box: ({min_x}, {min_y}, {max_x}, {max_y})")
 
     gdal.Warp(final_raster, final_raster, outputBounds=(min_x, min_y, max_x, max_y), dstNodata=-9999)
-    print(f"[INFO] Cropped {final_raster} to 90km x 90km centered region.")
+    print(f"[INFO] Cropped {final_raster} to get rid of edge disturbances in dir band.")
 
 def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, reprojected_raster, final_resampled_raster):
     """
     1. Clip input_raster using aoi_raster bounds
     2. Reproject clipped raster to EPSG:5070
-    3. Crop to 90km × 90km centered box
+    3. Crop to centered box
     4. Resample to 120m resolution
     """
     os.makedirs(os.path.dirname(clipped_raster), exist_ok=True)

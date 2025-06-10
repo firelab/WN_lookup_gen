@@ -167,7 +167,7 @@ def test_find_overlapping_tiles(input_raster, tiles_dir, output_raster):
     print(f"Overlap count raster saved: {output_raster}")
 
 def generate_weight_matrix():
-    rows, cols = 750, 750
+    rows, cols = 1067, 1067
     weight_matrix = np.zeros((rows, cols), dtype=np.float32)
     ignore_edge_width_pixels = 30
     fully_weighted_radius = 240
@@ -267,10 +267,8 @@ def process_single_tile(args):
     print(f"[INFO] Finished processing tile: {tile_path}")
     return results
 
-def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_csv="debug_tiles.csv", summary_csv="summary_pixels.csv", debug=True):
+def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster):
     print("[INFO] Processing tiles using multiprocessing...")
-    if debug:
-        print("DEBUG enabled")
 
     ds = gdal.Open(output_raster, gdal.GA_Update)
     if ds is None:
@@ -283,8 +281,6 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     u_sum_band = np.zeros_like(velocity_band, dtype=np.float32)
     v_sum_band = np.zeros_like(direction_band, dtype=np.float32)
     sum_weights_band = np.zeros_like(weight_band, dtype=np.float32)
-
-    overlapping_cells = {}
 
     tile_paths = [
         os.path.join(tiles_dir, tile_id, f"{tile_id}.tif")
@@ -315,19 +311,9 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
         
                     tile_contributions[(row, col)] += 1
 
-                    if (row, col) not in overlapping_cells:
-                        overlapping_cells[(row, col)] = {"tile_id": [], "u_weighted": [], "v_weighted": [], "weights": []}
-
-                    overlapping_cells[(row, col)]["tile_id"].append(tile_id)
-                    overlapping_cells[(row, col)]["u_weighted"].append(u_weighted)
-                    overlapping_cells[(row, col)]["v_weighted"].append(v_weighted)
-                    overlapping_cells[(row, col)]["weights"].append(weight)
-
                 u_sum_band[row, col] += u_weighted
                 v_sum_band[row, col] += v_weighted
                 sum_weights_band[row, col] += weight
-
-    overlapping_cells = {k: v for k, v in overlapping_cells.items() if tile_contributions[k] > 1}
 
     print(f"[DEBUG] Before Normalization -> Sum U: {u_sum_band.min()} to {u_sum_band.max()}")
     print(f"[DEBUG] Before Normalization -> Sum V: {v_sum_band.min()} to {v_sum_band.max()}")
@@ -338,30 +324,7 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     u_avg[valid_mask] = u_sum_band[valid_mask] / sum_weights_band[valid_mask]
     v_avg[valid_mask] = v_sum_band[valid_mask] / sum_weights_band[valid_mask]
 
-    if debug:
-        final_speed, final_dir = wind_uv_to_sd(u_avg, v_avg)
-    
     velocity_band[valid_mask], direction_band[valid_mask] = wind_uv_to_sd(u_avg[valid_mask], v_avg[valid_mask])
-
-    if debug:
-        with open(debug_csv, "w", newline="") as debug_file, open(summary_csv, "w", newline="") as summary_file:
-            debug_writer = csv.writer(debug_file)
-            summary_writer = csv.writer(summary_file)
-
-            debug_writer.writerow(["(x_coord,y_coord)", "lon", "lat", "tile_id", "u_weighted", "v_weighted", "weight"])
-            summary_writer.writerow(["(x_coord,y_coord)", "lon", "lat", "no_tiles", "u_sum", "v_sum", "total_weight", "u_avg", "v_avg", "final_speed", "final_dir"])
-
-            for (row, col), data in overlapping_cells.items():
-                x_proj, y_proj = get_mosaic_cell_center(mosaic_metadata, row, col)
-                cell = f"({x_proj}, {y_proj})"
-                lon, lat = convert_to_latlon(x_proj, y_proj)
-
-                for i in range(len(data["tile_id"])):
-                    debug_writer.writerow([cell, lon, lat, data["tile_id"][i], data["u_weighted"][i], data["v_weighted"][i], data["weights"][i]])
-
-                summary_writer.writerow([cell, lon, lat, tile_contributions[(row, col)], u_sum_band[row, col], v_sum_band[row, col], sum_weights_band[row, col], u_avg[row, col], v_avg[row, col], final_speed[row, col], final_dir[row, col]])
-        
-        print("[INFO] Debug CSV files were written.")
 
     # Set NoData values
     velocity_band[~valid_mask] = -9999
@@ -385,6 +348,71 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster, debug_c
     ds = None
     print("[INFO] Mosaic processing completed successfully!")
 
+def process_uv_components_only(tiles_dir, mosaic_metadata, output_raster):
+    print("[INFO] Processing tiles to produce U/V component bands...")
+
+    ds = gdal.Open(output_raster, gdal.GA_Update)
+    if ds is None:
+        raise RuntimeError(f"Failed to open output raster: {output_raster}")
+
+    u_band = np.full((mosaic_metadata["nrows"], mosaic_metadata["ncols"]), -9999, dtype=np.float32)
+    v_band = np.full((mosaic_metadata["nrows"], mosaic_metadata["ncols"]), -9999, dtype=np.float32)
+    weight_band = np.full((mosaic_metadata["nrows"], mosaic_metadata["ncols"]), -9999, dtype=np.float32)
+
+    u_sum_band = np.zeros_like(u_band, dtype=np.float32)
+    v_sum_band = np.zeros_like(v_band, dtype=np.float32)
+    sum_weights_band = np.zeros_like(weight_band, dtype=np.float32)
+
+    tile_paths = [
+        os.path.join(tiles_dir, tile_id, f"{tile_id}.tif")
+        for tile_id in os.listdir(tiles_dir)
+        if os.path.exists(os.path.join(tiles_dir, tile_id, f"{tile_id}.tif"))
+    ]
+
+    weight_matrix = generate_weight_matrix()
+    args = [(path, mosaic_metadata, weight_matrix) for path in tile_paths]
+
+    with Pool(processes=30) as pool:
+        for result in pool.imap_unordered(process_single_tile, args):
+            if result is None:
+                continue
+
+            for row, col, u_weighted, v_weighted, weight, tile_id in result:
+                if sum_weights_band[row, col] == 0:
+                    u_sum_band[row, col] = 0.0
+                    v_sum_band[row, col] = 0.0
+                    sum_weights_band[row, col] = 0.0
+
+                u_sum_band[row, col] += u_weighted
+                v_sum_band[row, col] += v_weighted
+                sum_weights_band[row, col] += weight
+
+    valid_mask = sum_weights_band > 0
+    u_band[valid_mask] = u_sum_band[valid_mask] / sum_weights_band[valid_mask]
+    v_band[valid_mask] = v_sum_band[valid_mask] / sum_weights_band[valid_mask]
+
+    # Set NoData values
+    u_band[~valid_mask] = -9999
+    v_band[~valid_mask] = -9999
+    weight_band[valid_mask] = sum_weights_band[valid_mask]
+    weight_band[~valid_mask] = -9999
+
+    # Write U/V to raster bands
+    ds.GetRasterBand(1).WriteArray(u_band)
+    ds.GetRasterBand(1).SetNoDataValue(-9999)
+    print("[INFO] U component band written")
+
+    ds.GetRasterBand(2).WriteArray(v_band)
+    ds.GetRasterBand(2).SetNoDataValue(-9999)
+    print("[INFO] V component band written")
+
+    # ds.GetRasterBand(3).WriteArray(weight_band)
+    # ds.GetRasterBand(3).SetNoDataValue(-9999)
+    # print("[INFO] Weight band written")
+
+    ds = None
+    print("[INFO] U/V mosaic processing completed successfully!")
+
 def main():
     """
     Create mosaics for each wind direction by overlaying processed tiles onto a reference raster.
@@ -398,11 +426,13 @@ def main():
     parser.add_argument("--base_raster", required=True, help="Path to the base reference raster (e.g., ref_raster_120m.tif)")
     parser.add_argument("--output_directory", required=True, help="Directory to save output mosaics")
     parser.add_argument("--tiles_base_directory", required=True, help="Directory containing tiles organized by wind direction")
+    parser.add_argument("--uv", action="store_true", help="Generate U/V component bands instead of Speed/Direction (default is Spd/Dir)")
     args = parser.parse_args()
 
     base_raster = args.base_raster
     output_directory = args.output_directory
     tiles_base_directory = args.tiles_base_directory
+    generate_uv = args.uv
 
     # Hardcoded list of wind directions (always same)
     wind_directions = [
@@ -463,12 +493,10 @@ def main():
 
         out_ds = None
 
-        # Prepare CSV debug/summary output paths
-        debug_csv = os.path.join(output_directory, f"debug_tiles_{direction}.csv")
-        summary_csv = os.path.join(output_directory, f"summary_pixels_{direction}.csv")
-
-        # Process tiles for the current wind direction
-        process_overlapping_tiles(tiles_directory, mosaic_metadata, output_raster, debug_csv, summary_csv, debug=False)
+        if generate_uv:
+            process_uv_components_only(tiles_directory, mosaic_metadata, output_raster)
+        else:
+            process_overlapping_tiles(tiles_directory, mosaic_metadata, output_raster)
 
 if __name__ == "__main__":
     main()
