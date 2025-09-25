@@ -367,8 +367,8 @@ def main():
     parser = argparse.ArgumentParser(description="Tile a large raster into smaller chunks with overlap.")
     parser.add_argument("--input_raster_path", required=True, help="Path to the input raster file")
     parser.add_argument("--output_directory", required=True, help="Directory to save output tiles")
-    parser.add_argument("--tile_size", type=int, default=64, help="Size of each tile in pixels (default: 64)")
-    parser.add_argument("--overlap", type=int, default=45, help="Overlap between tiles in pixels (default: 45)")
+    parser.add_argument("--tile_size", type=int, default=64, help="Size of each tile in km (default: 64)")
+    parser.add_argument("--overlap", type=int, default=45, help="Overlap between tiles in percentage (default: 45)")
     parser.add_argument("--num_workers", type=int, default=8, help="Number of parallel workers (default: 8)")
     args = parser.parse_args()
 
