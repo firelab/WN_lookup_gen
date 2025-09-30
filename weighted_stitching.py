@@ -305,12 +305,6 @@ def process_overlapping_tiles(tiles_dir, mosaic_metadata, output_raster):
                     v_sum_band[row, col] = 0.0
                     sum_weights_band[row, col] = 0.0
 
-                if debug:
-                    if (row, col) not in tile_contributions:
-                        tile_contributions[(row, col)] = 0
-        
-                    tile_contributions[(row, col)] += 1
-
                 u_sum_band[row, col] += u_weighted
                 v_sum_band[row, col] += v_weighted
                 sum_weights_band[row, col] += weight
