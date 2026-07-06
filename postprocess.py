@@ -27,9 +27,8 @@
 """
 
 import os
-import subprocess
 import multiprocessing
-from osgeo import gdal, ogr, osr
+from osgeo import gdal
 import numpy as np
 import argparse
 
@@ -173,15 +172,13 @@ def crop_to_original_tile(final_raster):
     gdal.Warp(final_raster, final_raster, outputBounds=(min_x, min_y, max_x, max_y), dstNodata=-9999)
     print(f"[INFO] Cropped {final_raster} to get rid of edge disturbances in dir band.")
 
-def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, reprojected_raster, final_resampled_raster):
+def clip_and_resample(input_raster, aoi_raster, clipped_raster, final_resampled_raster):
     """
     1. Clip input_raster using aoi_raster bounds
-    2. Reproject clipped raster to EPSG:5070
-    3. Crop to centered box
-    4. Resample to 120m resolution
+    2. Crop to centered box
+    3. Resample to 120m resolution
     """
     os.makedirs(os.path.dirname(clipped_raster), exist_ok=True)
-    os.makedirs(os.path.dirname(reprojected_raster), exist_ok=True)
     os.makedirs(os.path.dirname(final_resampled_raster), exist_ok=True)
 
     print(f"[INFO] Clipping and resampling {input_raster} to match AOI {aoi_raster}...")
@@ -202,42 +199,33 @@ def clip_and_resample_and_reproject(input_raster, aoi_raster, clipped_raster, re
     gdal.Warp(clipped_raster, input_raster, options=options_clip)
     print(f"[INFO] Clipped raster saved: {clipped_raster}")
 
-    # Step 4: Reproject to EPSG:5070
-    options_reproj = gdal.WarpOptions(
-        dstSRS="EPSG:5070",
-        resampleAlg=gdal.GRA_Bilinear,
-        dstNodata=-9999
-    )
-    gdal.Warp(reprojected_raster, clipped_raster, options=options_reproj)
-    print(f"[INFO] Reprojected raster saved: {reprojected_raster}")
+    # Step 4: Crop to 90km x 90km centered box
+    print(f"[INFO] Cropping {clipped_raster} to 90km × 90km box...")
+    crop_to_original_tile(clipped_raster)
 
-    # Step 5: Crop to 90km x 90km centered box
-    print(f"[INFO] Cropping {reprojected_raster} to 90km × 90km box...")
-    crop_to_original_tile(reprojected_raster)
-
-    # Step 6: Final resample to 120m
+    # Step 5: Final resample to 120m
     options_final = gdal.WarpOptions(
         xRes=120,
         yRes=120,
         resampleAlg=gdal.GRA_Bilinear,
         dstNodata=-9999
     )
-    gdal.Warp(final_resampled_raster, reprojected_raster, options=options_final)
+    gdal.Warp(final_resampled_raster, clipped_raster, options=options_final)
     print(f"[INFO] Final raster with 120m resolution saved: {final_resampled_raster}")
 
-def process_tile(folder, base_dir, aoi_tiles_dir, output_dir, directions):
+def process_tile(folder, base_dir, output_dir, directions):
     """Processes a single tile - Clip, resample, and reproject."""
     for wind_dir in directions:
         folder_path = os.path.join(base_dir, folder, "dems_folder", "dem0", "momentum", wind_dir)
         if not os.path.exists(folder_path):
             print(f"[WARNING] Folder {folder}: wind direction '{wind_dir}' does not exist. Skipping.")
             continue
-        
+
         # Look for *vel.asc files in this subfolder
         for file in os.listdir(folder_path):
             if not file.endswith("_vel.asc"):
                 continue
-            
+
             base_name = file.replace("_vel.asc", "")
             speed_file = os.path.join(folder_path, f"{base_name}_vel.asc")
             direction_file = os.path.join(folder_path, f"{base_name}_ang.asc")
@@ -249,75 +237,65 @@ def process_tile(folder, base_dir, aoi_tiles_dir, output_dir, directions):
             if not generated_tif:
                 print(f"[WARNING] Could not generate TIF for {folder}, wind_dir={wind_dir}.")
                 continue
-            
-            # Attempt to find a matching AOI tile shapefile
-            matching_aoi_tile = next(
-                (
-                    os.path.join(aoi_tiles_dir, shp)
-                    for shp in os.listdir(aoi_tiles_dir)
-                    if f"utm_overlap_aoi_{folder}_" in shp
-                ),
-                None
-            )
-            if not matching_aoi_tile or not os.path.exists(matching_aoi_tile):
-                print(f"[WARNING] No matching AOI tile found for folder {folder}.")
+
+            aoi_raster = os.path.join(base_dir, folder, "dems_folder", "dem0", "dem0.tif")
+            if not os.path.exists(aoi_raster):
+                print(f"[WARNING] No matching AOI raster found for folder {folder}.")
                 continue
-            
+
             clipped_tif = os.path.join(tile_wind_output_dir, f"{folder}_clipped.tif")
-            reprojected_tif = os.path.join(tile_wind_output_dir, f"{folder}_reproj.tif")
             final_resampled_raster = os.path.join(tile_wind_output_dir, f"{folder}.tif")
 
-            clip_and_resample_and_reproject(
+            clip_and_resample(
                 generated_tif,
-                matching_aoi_tile,
+                aoi_raster,
                 clipped_tif,
-                reprojected_tif,
                 final_resampled_raster
             )
 
             remove_temp_files(clipped_tif)
-            remove_temp_files(reprojected_tif)
             remove_temp_files(tif_output)
 
-def process_tiles(base_dir, aoi_tiles_dir, output_dir, directions):
+def process_tiles(base_dir, output_dir, directions):
     """Processes tiles in parallel using multiprocessing"""
     os.makedirs(output_dir, exist_ok=True)
     tile_folders = [f for f in os.listdir(base_dir) if f.isdigit() and int(f) in tiles]
     num_workers = 8
     with multiprocessing.Pool(processes=num_workers) as pool:
-        pool.starmap(process_tile, [(folder, base_dir, aoi_tiles_dir, output_dir, directions) for folder in tile_folders])
+        pool.starmap(process_tile, [(folder, base_dir, output_dir, directions) for folder in tile_folders])
     print("[INFO] Processing complete.")
 
 def main():
     """
-    Process WindNinja tiles based on input base directory, AOI (Area of Interest) tiles directory,
-    and output directory for processed results.
-    
+    Process WindNinja tiles based on input base directory and output directory for processed results.
+
     Arguments:
     - base_dir: Directory containing WindNinja directional outputs.
-    - aoi_tiles_dir: Directory containing AOI tiles to clip/match WindNinja tiles.
     - output_dir: Directory where processed tiles will be saved.
     - directions: List of wind directions to process.
     """
     parser = argparse.ArgumentParser(description="Process WindNinja tiles for multiple directions.")
     parser.add_argument("--base_dir", required=True, help="Path to base WindNinja output directory")
-    parser.add_argument("--aoi_tiles_dir", required=True, help="Path to directory containing AOI tiles")
     parser.add_argument("--output_dir", required=True, help="Path to output directory for processed files")
     args = parser.parse_args()
 
     base_dir = args.base_dir
-    aoi_tiles_dir = args.aoi_tiles_dir
     output_dir = args.output_dir
 
     # List of wind directions (fixed as per WindNinja output)
     directions = [
-        "0-0-deg", "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
-        "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",
-        "225-0-deg", "247-5-deg", "270-0-deg", "292-5-deg", "315-0-deg", "337-5-deg"
+        "0-0-deg", "11-25-deg", "22-5-deg", "33-75-deg",
+        "45-0-deg", "56-25-deg", "67-5-deg", "78-75-deg",
+        "90-0-deg", "101-25-deg", "112-5-deg", "123-75-deg",
+        "135-0-deg", "146-25-deg", "157-5-deg", "168-75-deg",
+        "180-0-deg", "191-25-deg", "202-5-deg", "213-75-deg",
+        "225-0-deg", "236-25-deg", "247-5-deg", "258-75-deg",
+        "270-0-deg", "281-25-deg", "292-5-deg", "303-75-deg",
+        "315-0-deg", "326-25-deg", "337-5-deg", "348-75-deg"
     ]
 
     # Call your processing function (assumed to be defined elsewhere)
-    process_tiles(base_dir, aoi_tiles_dir, output_dir, directions)
+    process_tiles(base_dir, output_dir, directions)
 
 if __name__ == "__main__":
     main()

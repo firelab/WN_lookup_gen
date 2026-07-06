@@ -430,9 +430,14 @@ def main():
 
     # Hardcoded list of wind directions (always same)
     wind_directions = [
-        "0-0-deg", "22-5-deg", "45-0-deg", "67-5-deg", "90-0-deg",
-        "112-5-deg", "135-0-deg", "157-5-deg", "180-0-deg", "202-5-deg",
-        "225-0-deg", "247-5-deg", "270-0-deg", "292-5-deg", "315-0-deg", "337-5-deg"
+        "0-0-deg", "11-25-deg", "22-5-deg", "33-75-deg",
+        "45-0-deg", "56-25-deg", "67-5-deg", "78-75-deg",
+        "90-0-deg", "101-25-deg", "112-5-deg", "123-75-deg",
+        "135-0-deg", "146-25-deg", "157-5-deg", "168-75-deg",
+        "180-0-deg", "191-25-deg", "202-5-deg", "213-75-deg",
+        "225-0-deg", "236-25-deg", "247-5-deg", "258-75-deg",
+        "270-0-deg", "281-25-deg", "292-5-deg", "303-75-deg",
+        "315-0-deg", "326-25-deg", "337-5-deg", "348-75-deg"
     ]
 
     # Open base raster to extract metadata

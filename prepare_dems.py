@@ -1,6 +1,6 @@
 """
  * Project:  WN_Lookup_Gen
- * Purpose:  Python script for preparing tiles from conus landscape and reproject to UTM
+ * Purpose:  Python script for preparing overlapped DEM tiles for WindNinja
  * Author: Gunjan Dayani <gunjan.dayani@usda.gov>
 
  ******************************************************************************
@@ -28,9 +28,9 @@
 
 import os
 import shutil
-import numpy as np
 import multiprocessing as mp
-from osgeo import gdal, osr, ogr
+import numpy as np
+from osgeo import gdal
 import argparse
 
 def get_nodata_value(raster_path):
@@ -42,40 +42,6 @@ def get_nodata_value(raster_path):
     print(f"[INFO] Detected NoData Value: {nodata}")
     return nodata
 
-def determine_utm_zone(lon, lat):
-    """Determine the correct UTM zone from longitude (degrees) and latitude."""
-    if lon < -180 or lon > 180:
-        print(f"[ERROR] Invalid longitude detected: {lon}. Expected degrees, but got meters?")
-        return None
-
-    utm_zone = int((lon + 186) / 6)
-    epsg_code = 32600 + utm_zone  # EPSG for UTM North
-    print(f"[DEBUG] Determined UTM Zone: {epsg_code} for Lon: {lon}, Lat: {lat}")
-    return epsg_code
-
-def get_raster_bounds(raster_path):
-    """Returns the bounding box of the input raster (min_x, min_y, max_x, max_y)."""
-    ds = gdal.Open(raster_path)
-    transform = ds.GetGeoTransform()
-    width, height = ds.RasterXSize, ds.RasterYSize
-    min_x = transform[0]
-    max_x = min_x + width * transform[1]
-    max_y = transform[3]
-    min_y = max_y + height * transform[5]
-    ds = None
-    return min_x, min_y, max_x, max_y
-
-def albers_to_latlon(x, y):
-    """Convert Albers Equal Area coordinates to Lat/Lon using GDAL transformation."""
-    source_srs = osr.SpatialReference()
-    source_srs.ImportFromEPSG(5070)  # CONUS Albers
-    target_srs = osr.SpatialReference()
-    target_srs.ImportFromEPSG(4326)  # WGS 84 (Lat/Lon)
-    transform = osr.CoordinateTransformation(source_srs, target_srs)
-    lat, lon, _ = transform.TransformPoint(x, y)
-    print(f"[DEBUG] Converted Albers to Lat/Lon: ({x}, {y}) -> ({lat}, {lon})")
-    return lat, lon
-
 def clean_output_directory(output_dir):
     """Delete and recreate the output directory to ensure a clean start."""
     if os.path.exists(output_dir):
@@ -83,56 +49,18 @@ def clean_output_directory(output_dir):
         shutil.rmtree(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-def find_bounding_square(utm_bounds):
-    """Find the smallest square in UTM that fully contains the reprojected AOI."""
-    min_x, min_y, max_x, max_y = utm_bounds
-    width = max_x - min_x
-    height = max_y - min_y
-    square_size = max(width, height)  # Ensure AOI fits within a square
-
-    center_x = (min_x + max_x) / 2
-    center_y = (min_y + max_y) / 2
-
-    new_min_x = center_x - square_size / 2
-    new_max_x = center_x + square_size / 2
-    new_min_y = center_y - square_size / 2
-    new_max_y = center_y + square_size / 2
-
-    return (new_min_x, new_min_y, new_max_x, new_max_y)
-
-def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, overlap):
-    """Process raster tiles with specified overlap, reproject to UTM, and ensure square bounds."""
+def prepare_windninja_dem(input_raster, tile_bounds, output_dir, tile_index, overlap):
+    """Create a WindNinja DEM tile with the requested overlap."""
     nodata_value = get_nodata_value(input_raster)
-    raster_min_x, raster_min_y, raster_max_x, raster_max_y = get_raster_bounds(input_raster)
 
-    temp_albers_dir = os.path.join(output_dir, "temp_albers_tiles")
-    utm_overlap_dir = os.path.join(output_dir, "utm_aoi_tiles")
-    final_utm_dir = os.path.join(output_dir, "final_utm_tiles")
-
-    os.makedirs(temp_albers_dir, exist_ok=True)
-    os.makedirs(utm_overlap_dir, exist_ok=True)
-    os.makedirs(final_utm_dir, exist_ok=True)
+    final_tiles_dir = os.path.join(output_dir, "final_tiles")
+    os.makedirs(final_tiles_dir, exist_ok=True)
 
     # Compute center of the tile
     min_x, min_y, max_x, max_y = tile_bounds
     center_x, center_y = (min_x + max_x) / 2, (min_y + max_y) / 2
 
-    # Compute 350% Overlapped Bounds in Albers
-    # As we are not taking whole input into memory, after deciding not tilted tile bounds(perfect square)
-    # in UTM we need to have enough data from which we can clip data. So this is kind of temporary lookup tiles
-    # I have calculated this number 350 so that we have enough data to clip from.
-    expanded_width = (max_x - min_x) * 4.5
-    expanded_height = (max_y - min_y) * 4.5
-
-    expanded_bounds = (
-        center_x - expanded_width / 2,
-        center_y - expanded_height / 2,
-        center_x + expanded_width / 2,
-        center_y + expanded_height / 2,
-    )
-    print(f"[INFO] 350% Expanded Bounds in Albers: {expanded_bounds}")
-
-    # Compute AOI bounds based on specified overlap percentage
+    # Compute tile bounds with the requested overlap percentage.
     aoi_width = (max_x - min_x) * (1 + overlap / 100)
     aoi_height = (max_y - min_y) * (1 + overlap / 100)
 
@@ -142,148 +70,41 @@ def overlap_and_reproject(input_raster, tile_bounds, output_dir, tile_index, ove
         center_x + aoi_width / 2,
         center_y + aoi_height / 2,
     )
-    print(f"[INFO] {overlap}% AOI Bounds in Albers: {aoi_bounds}")
+    print(f"[INFO] {overlap}% overlapped tile bounds: {aoi_bounds}")
 
-    # Save Temporary Overlapped Albers Tiles(350% and given overlap percent
-    # So that we don't have -9999 values (other than NoData: 32767) which is present in input landscape file.
-    temp_350_albers = os.path.join(temp_albers_dir, f"temp_350_albers_{tile_index}.tif")
-    gdal.Warp(
-        temp_350_albers,
-        input_raster,
-        outputBounds=expanded_bounds,
-        dstSRS="EPSG:5070",
-        dstNodata=nodata_value,
-        warpOptions=[f'INIT_DEST={nodata_value}'],
-        resampleAlg=gdal.GRA_NearestNeighbour
-    )
-    ds = gdal.Open(temp_350_albers, gdal.GA_Update)
-    for band_index in range(1, ds.RasterCount + 1):
-        band = ds.GetRasterBand(band_index)
-        arr = band.ReadAsArray()
-
-        # Replace rogue -9999 values and enforce correct NoData value
-        arr[(arr == -9999) | (arr == band.GetNoDataValue())] = nodata_value
-        band.WriteArray(arr)
-        band.SetNoDataValue(nodata_value)
-
-    ds.FlushCache()
-    ds = None
-
-    temp_overlap_albers = os.path.join(temp_albers_dir, f"temp_overlap_albers_{tile_index}.tif")
-    gdal.Warp(
-        temp_overlap_albers,
-        input_raster,
-        outputBounds=aoi_bounds,
-        dstSRS="EPSG:5070",
-        dstNodata=nodata_value,
-        warpOptions=[f'INIT_DEST={nodata_value}'],
-        resampleAlg=gdal.GRA_NearestNeighbour
-    )
-    ds = gdal.Open(temp_overlap_albers, gdal.GA_Update)
-    for band_index in range(1, ds.RasterCount + 1):
-        band = ds.GetRasterBand(band_index)
-        arr = band.ReadAsArray()
-
-        # Replace rogue -9999 values and enforce correct NoData value
-        arr[(arr == -9999) | (arr == band.GetNoDataValue())] = nodata_value
-        band.WriteArray(arr)
-        band.SetNoDataValue(nodata_value)
-
-    ds.FlushCache()
-    ds = None
-
-    # Determine UTM Zone After 350% Expansion
-    min_lat, min_lon = albers_to_latlon(expanded_bounds[0], expanded_bounds[1])
-    max_lat, max_lon = albers_to_latlon(expanded_bounds[2], expanded_bounds[3])
-    center_lon, center_lat = (min_lon + max_lon) / 2, (min_lat + max_lat) / 2
-    print(f"center_lon, center_lat : {center_lon, center_lat}")
-    epsg_utm = determine_utm_zone(center_lon, center_lat)
-    print("Determined UTM Zone: " + str(epsg_utm))
-
-    # Reproject 350% Overlapped Tile to UTM
-    temp_utm_350 = os.path.join(temp_albers_dir, f"utm_350_tile_{tile_index}_epsg{epsg_utm}.tif")
-    gdal.Warp(
-        temp_utm_350,
-        temp_350_albers,
-        dstSRS=f"EPSG:{epsg_utm}",
-        dstNodata=nodata_value,
-        warpOptions=[f'INIT_DEST={nodata_value}'],
-        resampleAlg=gdal.GRA_NearestNeighbour
-    )
-
-    # Reproject given percentage overlapped AOI Tile to UTM
-    temp_utm_overlap_path = os.path.join(utm_overlap_dir, f"temp_utm_overlap_aoi_{tile_index}_epsg{epsg_utm}.tif")
-    gdal.Warp(
-        temp_utm_overlap_path,
-        temp_overlap_albers,
-        dstSRS=f"EPSG:{epsg_utm}",
-        dstNodata=nodata_value,
-        warpOptions=[f'INIT_DEST={nodata_value}'],
-        resampleAlg=gdal.GRA_NearestNeighbour
-    )
-    utm_overlap_path = os.path.join(utm_overlap_dir, f"utm_overlap_aoi_{tile_index}_epsg{epsg_utm}.tif")
-    gdal.Warp(
-       utm_overlap_path,
-       temp_utm_overlap_path,
-       xRes=30,
-       yRes=30,
-       dstSRS=f"EPSG:{epsg_utm}",
-       dstNodata=nodata_value,
-       resampleAlg=gdal.GRA_NearestNeighbour
-    )
-    os.remove(temp_utm_overlap_path)
-
-    # Compute Final Square and not tilted dem in UTM
-    utm_overlap_ds = gdal.Open(utm_overlap_path)
-    transform_overlap = utm_overlap_ds.GetGeoTransform()
-    width_overlap, height_overlap = utm_overlap_ds.RasterXSize, utm_overlap_ds.RasterYSize
-    pixel_size_x, pixel_size_y = abs(transform_overlap[1]), abs(transform_overlap[5])
-
-    utm_overlap_min_x = transform_overlap[0]
-    utm_overlap_max_x = utm_overlap_min_x + width_overlap * pixel_size_x
-    utm_overlap_max_y = transform_overlap[3]
-    utm_overlap_min_y = utm_overlap_max_y - height_overlap * pixel_size_y
-
-    final_bounds = find_bounding_square((utm_overlap_min_x, utm_overlap_min_y, utm_overlap_max_x, utm_overlap_max_y))
-
-    # Crop to Final Square UTM Tile
-    parent_dir = os.path.join(final_utm_dir, str(tile_index))
+    parent_dir = os.path.join(final_tiles_dir, str(tile_index))
     base_output_dir = os.path.join(parent_dir, "dems_folder", "dem0")
     os.makedirs(base_output_dir, exist_ok=True)
-    final_utm_path = os.path.join(base_output_dir, "dem0_temp.tif")
+    final_resampled_path = os.path.join(base_output_dir, "dem0.tif")
 
     gdal.Warp(
-        final_utm_path,
-        temp_utm_350,
-        outputBounds=final_bounds,
-        dstSRS=f"EPSG:{epsg_utm}",
-        dstNodata=nodata_value,
-        warpOptions=[f'INIT_DEST={nodata_value}'],
-        resampleAlg=gdal.GRA_NearestNeighbour
-    )
-
-    final_resampled_utm_path = os.path.join(base_output_dir, "dem0.tif")
-
-    gdal.Warp(
-        final_resampled_utm_path,
-        final_utm_path,
+        final_resampled_path,
+        input_raster,
+        outputBounds=aoi_bounds,
         xRes=30,
         yRes=30,
-        dstSRS=f"EPSG:{epsg_utm}",
         dstNodata=nodata_value,
         targetAlignedPixels=True,
         resampleAlg=gdal.GRA_NearestNeighbour
     )
 
-    os.remove(final_utm_path)
-    os.remove(temp_350_albers)
-    os.remove(temp_overlap_albers)
-    os.remove(temp_utm_350)
+    ds = gdal.Open(final_resampled_path, gdal.GA_Update)
+    for band_index in range(1, ds.RasterCount + 1):
+        band = ds.GetRasterBand(band_index)
+        arr = band.ReadAsArray()
 
-    print(f"[INFO] Final Square UTM Tile Saved: {final_resampled_utm_path}")
+        # Replace rogue -9999 values and enforce correct NoData value.
+        arr[(arr == -9999) | (arr == band.GetNoDataValue())] = nodata_value
+        band.WriteArray(arr)
+        band.SetNoDataValue(nodata_value)
+
+    ds.FlushCache()
+    ds = None
+
+    print(f"[INFO] Final overlapped DEM tile saved: {final_resampled_path}")
 
 def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max_tiles=None, num_workers=8):
-    """Generate raster tiles with overlap and reproject to UTM in batches of 8 tiles at a time."""
+    """Generate raster tiles with overlap in batches of 8 tiles at a time."""
 
     clean_output_directory(output_dir)
     original_tiles_dir = os.path.join(output_dir, "original_tiles")
@@ -348,7 +169,7 @@ def create_tiles(input_raster, output_dir, tile_size_km, overlap_percentage, max
             tile_count += 1
             if len(tile_data_list) == 8 or tile_count >= max_tiles:
                 with mp.Pool(processes=num_workers) as pool:
-                    pool.starmap(overlap_and_reproject, tile_data_list)
+                    pool.starmap(prepare_windninja_dem, tile_data_list)
                 tile_data_list = []  # Clear the list for the next batch
 
     print(f"[INFO] Total tiles generated: {tile_count}/{estimated_total_tiles}")
